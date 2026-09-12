@@ -241,13 +241,25 @@ void DeviceMemoryReport::RemoveResourceBinding(uint64_t resource_handle) {
     uint64_t memory_handle = mem_it->second;
     resource_to_memory_map_.erase(mem_it);
 
+    auto res_it = resources_.find(resource_handle);
+    bool is_img = (res_it != resources_.end()) ? res_it->second.is_image : false;
+    VkDeviceSize sub_size = (res_it != resources_.end()) ? res_it->second.size : 0;
+    VkDeviceSize sub_offset = 0;
+    std::string cluster_name = "unbound_memory";
+
     auto allocation_it = memory_allocations_.find(memory_handle);
     if (allocation_it != memory_allocations_.end()) {
-        auto& suballocations = allocation_it->second.sub_allocations;
+        auto& alloc = allocation_it->second;
+        if (res_it != resources_.end()) {
+            cluster_name = res_it->second.GetCluster(alloc.mem_flags);
+        }
+        auto& suballocations = alloc.sub_allocations;
         // Search by resource handle to identify which specific suballocation to remove,
         // since a single memory block can have multiple resources bound to it.
         for (auto it = suballocations.begin(); it != suballocations.end(); ++it) {
             if (it->resource_handle == resource_handle) {
+                sub_size = it->size;
+                sub_offset = it->offset;
                 SubtractCounterBytes(it->usage_track, it->size);
                 suballocations.erase(it);
                 break;
@@ -255,18 +267,35 @@ void DeviceMemoryReport::RemoveResourceBinding(uint64_t resource_handle) {
         }
         UpdateAllocationUnboundCounter(memory_handle);
     }
+
+    TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                        "operation", "DESTROY",
+                        "source", is_img ? "IMAGE" : "BUFFER",
+                        "memory_object_id", memory_handle,
+                        "size", static_cast<uint64_t>(sub_size),
+                        "offset", static_cast<uint64_t>(sub_offset),
+                        "object_handle", resource_handle,
+                        "memory_type", cluster_name);
 }
 
 void DeviceMemoryReport::BindResourceMemory(uint64_t resource_handle, uint64_t memory_handle, VkDeviceSize memory_offset) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
     auto res_it = resources_.find(resource_handle);
-    if (res_it == resources_.end() || res_it->second.size == 0) return;
+    if (res_it == resources_.end()) {
+        auto& new_res = resources_[resource_handle];
+        new_res.is_image = false;
+        res_it = resources_.find(resource_handle);
+    }
 
     // If the same resource handle is passed more than once, remove stale bindings first.
     RemoveResourceBinding(resource_handle);
 
     auto& allocation = memory_allocations_[memory_handle];
     VkDeviceSize res_size = res_it->second.size;
+    if (res_size == 0 && allocation.total_size > 0) {
+        res_size = allocation.total_size;
+    }
+    if (res_size == 0) return;
     std::string new_usage_track = GetUsageTrackName(allocation.is_driver, res_it->second.GetCluster(allocation.mem_flags));
 
     // Suballocations represent individual resources (like buffers or images) that are bound 
@@ -278,6 +307,17 @@ void DeviceMemoryReport::BindResourceMemory(uint64_t resource_handle, uint64_t m
     // Each distinct virtual resource handle adds its virtual size to its specific category track upon binding.
     AddCounterBytes(new_usage_track, res_size);
     UpdateAllocationUnboundCounter(memory_handle);
+
+    bool is_img = res_it->second.is_image;
+    std::string cluster_name = res_it->second.GetCluster(allocation.mem_flags);
+    TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                        "operation", "BIND",
+                        "source", is_img ? "IMAGE" : "BUFFER",
+                        "memory_object_id", memory_handle,
+                        "size", static_cast<uint64_t>(res_size),
+                        "offset", static_cast<uint64_t>(memory_offset),
+                        "object_handle", resource_handle,
+                        "memory_type", cluster_name);
 }
 
 void DeviceMemoryReport::OnBindBufferMemory(uint64_t buffer_handle, uint64_t memory_handle, VkDeviceSize memory_offset) {
@@ -351,6 +391,64 @@ void DeviceMemoryReport::OnDestroyObject(uint64_t object_handle) {
     resources_.erase(object_handle);
 }
 
+void DeviceMemoryReport::DumpCurrentCountersAndAllocations() {
+    std::lock_guard<std::mutex> lock(counter_mutex_);
+    for (const auto& pair : usage_memory_bytes_) {
+        if (pair.second > 0) {
+            TRACE_COUNTER("VulkanDeviceMemoryReport", GetCounterTrack(pair.first), pair.second);
+        }
+    }
+
+    for (const auto& pair : memory_allocations_) {
+        uint64_t mem_handle = pair.first;
+        const auto& alloc = pair.second;
+        if (alloc.total_size == 0) continue;
+
+        std::string mem_type = "unbound_memory";
+        if (alloc.is_driver) {
+            auto res_it = resources_.find(alloc.object_handle);
+            if (res_it != resources_.end()) {
+                mem_type = res_it->second.GetCluster(alloc.mem_flags);
+            }
+        }
+
+        TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                            "operation", "CREATE",
+                            "source", alloc.is_driver ? "DRIVER" : "DEVICE_MEMORY",
+                            "memory_object_id", mem_handle,
+                            "size", static_cast<uint64_t>(alloc.total_size),
+                            "offset", static_cast<uint64_t>(0),
+                            "object_handle", alloc.object_handle,
+                            "memory_type", mem_type);
+
+        for (const auto& sub : alloc.sub_allocations) {
+            auto res_it = resources_.find(sub.resource_handle);
+            bool is_img = (res_it != resources_.end()) ? res_it->second.is_image : false;
+            std::string cluster_name = (res_it != resources_.end()) ? res_it->second.GetCluster(alloc.mem_flags) : "unbound_memory";
+
+            TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                                "operation", "BIND",
+                                "source", is_img ? "IMAGE" : "BUFFER",
+                                "memory_object_id", mem_handle,
+                                "size", static_cast<uint64_t>(sub.size),
+                                "offset", static_cast<uint64_t>(sub.offset),
+                                "object_handle", sub.resource_handle,
+                                "memory_type", cluster_name);
+        }
+
+        if (alloc.applied_unbound_bytes > 0 && !alloc.sub_allocations.empty()) {
+            TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                                "operation", "BIND",
+                                "source", alloc.is_driver ? "DRIVER" : "DEVICE_MEMORY",
+                                "memory_object_id", mem_handle,
+                                "size", static_cast<uint64_t>(alloc.applied_unbound_bytes),
+                                "offset", static_cast<uint64_t>(0),
+                                "object_handle", mem_handle,
+                                "memory_type", "unbound_memory");
+        }
+    }
+}
+
 void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackDataEXT* pCallbackData) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
     // For internal driver allocations, a single object (e.g. VkImage) might have multiple distinct memory allocations.
@@ -358,16 +456,46 @@ void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackD
     // For device memory allocations, objectHandle is the VkDeviceMemory handle, which we use as the key for compatibility.
     uint64_t key = (pCallbackData->objectType == VK_OBJECT_TYPE_DEVICE_MEMORY) ? pCallbackData->objectHandle : pCallbackData->memoryObjectId;
 
+    bool is_driver = (pCallbackData->flags & VK_DEVICE_MEMORY_REPORT_FLAG_INTERNAL_OBJECT_BIT_EXT) != 0;
+    const char* op_str = nullptr;
     if (pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT ||
         pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_IMPORT_EXT) {
         auto& allocation = memory_allocations_[key];
         allocation.total_size = pCallbackData->size;
-        allocation.is_driver = (pCallbackData->flags & VK_DEVICE_MEMORY_REPORT_FLAG_INTERNAL_OBJECT_BIT_EXT) != 0;
+        allocation.is_driver = is_driver;
         allocation.object_handle = pCallbackData->objectHandle;
+        allocation.heap_index = pCallbackData->heapIndex;
         UpdateAllocationUnboundCounter(key);
+        op_str = "CREATE";
     } else if (pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT ||
                pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_UNIMPORT_EXT) {
         RemoveAllocationTracking(key);
+        op_str = "DESTROY";
+    }
+
+    if (op_str != nullptr) {
+        uint64_t mem_obj_id = (pCallbackData->objectType == VK_OBJECT_TYPE_DEVICE_MEMORY) ? pCallbackData->objectHandle : pCallbackData->memoryObjectId;
+        VkDeviceSize mem_size = pCallbackData->size;
+        uint64_t obj_handle = pCallbackData->objectHandle;
+        uint32_t heap_idx = pCallbackData->heapIndex;
+
+        const char* src_str = is_driver ? "DRIVER" : (pCallbackData->objectType == VK_OBJECT_TYPE_BUFFER ? "BUFFER" : (pCallbackData->objectType == VK_OBJECT_TYPE_IMAGE ? "IMAGE" : "DEVICE_MEMORY"));
+        std::string mem_type = "unbound_memory";
+        if (is_driver) {
+            auto res_it = resources_.find(obj_handle);
+            if (res_it != resources_.end()) {
+                mem_type = res_it->second.GetCluster(0);
+            }
+        }
+
+        TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                            "operation", op_str,
+                            "source", src_str,
+                            "memory_object_id", mem_obj_id,
+                            "size", static_cast<uint64_t>(mem_size),
+                            "offset", static_cast<uint64_t>(0),
+                            "object_handle", obj_handle,
+                            "memory_type", mem_type);
     }
 }
 
@@ -398,12 +526,33 @@ void DeviceMemoryReport::OnAllocateMemory(VkDevice device, VkDeviceMemory memory
     } else {
         allocation.total_size = size;
         allocation.is_driver = false;
+        allocation.object_handle = handle;
+        allocation.heap_index = (memory_type_index != UINT32_MAX) ? memory_type_index : 0;
         UpdateAllocationUnboundCounter(handle);
+
+        TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                            "operation", "CREATE",
+                            "source", "DEVICE_MEMORY",
+                            "memory_object_id", handle,
+                            "size", static_cast<uint64_t>(size),
+                            "offset", static_cast<uint64_t>(0),
+                            "object_handle", handle,
+                            "memory_type", "unbound_memory");
     }
 }
 
 void DeviceMemoryReport::OnFreeMemory(VkDevice device, VkDeviceMemory memory) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
     if (has_callback_map_[device]) return;
-    RemoveAllocationTracking(reinterpret_cast<uint64_t>(memory));
+    uint64_t handle = reinterpret_cast<uint64_t>(memory);
+    RemoveAllocationTracking(handle);
+
+    TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanMemoryAllocation",
+                        "operation", "DESTROY",
+                        "source", "DEVICE_MEMORY",
+                        "memory_object_id", handle,
+                        "size", static_cast<uint64_t>(0),
+                        "offset", static_cast<uint64_t>(0),
+                        "object_handle", handle,
+                        "memory_type", "unbound_memory");
 }

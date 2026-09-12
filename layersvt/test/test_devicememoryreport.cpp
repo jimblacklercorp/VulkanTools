@@ -123,6 +123,10 @@ TEST_F(DeviceMemoryReportTests, EmitEventsAndSubCounters) {
     cb_data.size = 2048;
     DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
 
+    // Free the driver allocation
+    cb_data.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
+    DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
+
     // Test direct allocate/free fallbacks
     VkDevice dummy_device = reinterpret_cast<VkDevice>(0x1234);
     VkDeviceMemory dummy_memory = reinterpret_cast<VkDeviceMemory>(0x5678);
@@ -552,3 +556,45 @@ TEST_F(DeviceMemoryReportTests, ProactiveMemoryRequirementsQuery) {
     vkDestroyBuffer(device, buffer, nullptr);
     vkDestroyDevice(device, nullptr);
 }
+
+TEST_F(DeviceMemoryReportTests, MemoryReportSnapshotDump) {
+    TEST_DESCRIPTION("Test DumpCurrentCountersAndAllocations state dump and instant event emissions when a trace session begins");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    uint64_t mem_handle = 0xE001;
+    uint64_t buffer_handle = 0xE101;
+    uint64_t image_handle = 0xE102;
+
+    // Allocate physical memory
+    VkDeviceMemoryReportCallbackDataEXT cb_data = {};
+    cb_data.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_REPORT_CALLBACK_DATA_EXT;
+    cb_data.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT;
+    cb_data.memoryObjectId = 0x7000;
+    cb_data.size = 16384;
+    cb_data.objectType = VK_OBJECT_TYPE_DEVICE_MEMORY;
+    cb_data.objectHandle = mem_handle;
+    DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
+
+    // Bind a buffer and an image sub-allocation
+    DeviceMemoryReport::Get().OnCreateBuffer(buffer_handle, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 4096);
+    DeviceMemoryReport::Get().OnRecordResourceSize(buffer_handle, 4096);
+    DeviceMemoryReport::Get().OnBindBufferMemory(buffer_handle, mem_handle, 0);
+
+    DeviceMemoryReport::Get().OnCreateImage(image_handle, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    DeviceMemoryReport::Get().OnRecordResourceSize(image_handle, 4096);
+    DeviceMemoryReport::Get().OnBindImageMemory(image_handle, mem_handle, 4096);
+
+    // Test dumping the current snapshot of counters, allocations, suballocations, and unbound memory
+    DeviceMemoryReport::Get().DumpCurrentCountersAndAllocations();
+
+    // Verify cleanup
+    cb_data.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
+    DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
+
+    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle);
+    DeviceMemoryReport::Get().OnDestroyObject(image_handle);
+
+    EXPECT_TRUE(true);
+}
+

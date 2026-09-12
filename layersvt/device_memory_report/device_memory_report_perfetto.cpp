@@ -14,6 +14,7 @@
  */
 
 #include "device_memory_report_perfetto.h"
+#include "device_memory_report.h"
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -22,6 +23,15 @@
 
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 
+class DeviceMemoryReportSessionObserver : public perfetto::TrackEventSessionObserver {
+ public:
+  void OnStart(const perfetto::DataSourceBase::StartArgs&) override {
+      DeviceMemoryReport::Get().DumpCurrentCountersAndAllocations();
+  }
+};
+
+static DeviceMemoryReportSessionObserver g_session_observer;
+
 void InitializeDeviceMemoryReportPerfetto() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
@@ -29,6 +39,7 @@ void InitializeDeviceMemoryReportPerfetto() {
         args.backends = perfetto::kSystemBackend;
         perfetto::Tracing::Initialize(args);
         perfetto::TrackEvent::Register();
+        perfetto::TrackEvent::AddSessionObserver(&g_session_observer);
     });
 }
 
