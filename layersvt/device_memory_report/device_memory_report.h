@@ -171,6 +171,13 @@ class DeviceMemoryReport {
     VkDeviceSize GetRecordedResourceSize(uint64_t resource_handle);
 
     /**
+     * @brief Retrieves the current total memory bytes recorded on a usage track (for testing).
+     * @param track The full usage track name (e.g. "vulkan.mem.app.usage.unbound_memory").
+     * @return Number of bytes on the track.
+     */
+    uint64_t GetUsageCounterBytes(const std::string& track);
+
+    /**
      * @brief Tracks creation of a Vulkan image and its usage flags.
      * @param image_handle The 64-bit handle of the Vulkan image.
      * @param usage Usage flags for the created image.
