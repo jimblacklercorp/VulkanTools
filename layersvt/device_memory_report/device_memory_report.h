@@ -16,9 +16,11 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef VK_DEVICE_MEMORY_REPORT_FLAG_INTERNAL_OBJECT_BIT_EXT
@@ -192,6 +194,27 @@ class DeviceMemoryReport {
      */
     void OnDestroyObject(VkObjectType object_type, uint64_t object_handle);
 
+    /**
+     * @brief Records the debug name an application gave to a Vulkan object and publishes it.
+     *
+     * Names arrive through VK_EXT_debug_utils or VK_EXT_debug_marker, typically well after the
+     * object was created, so they are published as their own event stream rather than attached to
+     * the memory events. Only the object types this layer attributes memory to are kept.
+     *
+     * @param object_type The type of the object, as a VkObjectType.
+     * @param object_handle The 64-bit handle of the object.
+     * @param name The name given by the application. A null or empty name clears the stored name.
+     */
+    void SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name);
+
+    /**
+     * @brief Retrieves the debug name recorded for an object.
+     * @param object_type The type of the object, as a VkObjectType.
+     * @param object_handle The 64-bit handle of the object.
+     * @return The recorded name, or an empty string if the object has no name.
+     */
+    std::string GetDebugObjectName(VkObjectType object_type, uint64_t object_handle);
+
    private:
     /**
      * @brief Represents a sub-allocation of a Vulkan resource (buffer or image) bound within a physical memory allocation.
@@ -255,6 +278,11 @@ class DeviceMemoryReport {
     void RemoveAllocationTracking(uint64_t memory_handle);
 
     /**
+     * @brief Republishes every known object name. Called while counter_mutex_ is held.
+     */
+    void EmitAllDebugObjectNames();
+
+    /**
      * @brief Increments trace counter for a memory track.
      */
     void AddCounterBytes(const std::string& track, uint64_t size);
@@ -308,4 +336,12 @@ class DeviceMemoryReport {
      * @brief Maps a usage track name to its current total memory usage in bytes.
      */
     std::unordered_map<std::string, uint64_t> usage_memory_bytes_;
+
+    /**
+     * @brief Maps a pair of (object_type, object_handle) to the name the application gave the object.
+     *
+     * Handles are only unique within an object type, hence the pair key. Guarded by counter_mutex_.
+     * std::map is used instead of unordered_map for pair key support and deterministic replay order.
+     */
+    std::map<std::pair<VkObjectType, uint64_t>, std::string> debug_object_names_;
 };

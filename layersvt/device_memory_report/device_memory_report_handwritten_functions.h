@@ -449,4 +449,39 @@ VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2KHR(VkDevice device, co
     }
 }
 
+// VK_EXT_debug_marker names objects with the legacy VkDebugReportObjectTypeEXT enum. Only the
+// types this layer attributes memory to are mapped.
+static VkObjectType DebugReportObjectTypeToObjectType(VkDebugReportObjectTypeEXT object_type) {
+    switch (object_type) {
+        case VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT: return VK_OBJECT_TYPE_BUFFER;
+        case VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT: return VK_OBJECT_TYPE_IMAGE;
+        case VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_MEMORY_EXT: return VK_OBJECT_TYPE_DEVICE_MEMORY;
+        default: return VK_OBJECT_TYPE_UNKNOWN;
+    }
+}
+
+// Object naming from VK_EXT_debug_utils.
+VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsObjectNameInfoEXT* pNameInfo) {
+    if (pNameInfo != nullptr) {
+        DeviceMemoryReport::Get().SetDebugObjectName(pNameInfo->objectType, pNameInfo->objectHandle,
+                                                     pNameInfo->pObjectName);
+    }
+    auto* table = device_dispatch_table(device);
+    // Naming is informational, so a driver that does not implement it is not an error.
+    if (table == nullptr || table->SetDebugUtilsObjectNameEXT == nullptr) return VK_SUCCESS;
+    return table->SetDebugUtilsObjectNameEXT(device, pNameInfo);
+}
+
+// Object naming from VK_EXT_debug_marker, the predecessor of VK_EXT_debug_utils.
+VKAPI_ATTR VkResult VKAPI_CALL vkDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebugMarkerObjectNameInfoEXT* pNameInfo) {
+    if (pNameInfo != nullptr) {
+        DeviceMemoryReport::Get().SetDebugObjectName(
+            DebugReportObjectTypeToObjectType(pNameInfo->objectType), pNameInfo->object,
+            pNameInfo->pObjectName);
+    }
+    auto* table = device_dispatch_table(device);
+    if (table == nullptr || table->DebugMarkerSetObjectNameEXT == nullptr) return VK_SUCCESS;
+    return table->DebugMarkerSetObjectNameEXT(device, pNameInfo);
+}
+
 } // extern "C"
