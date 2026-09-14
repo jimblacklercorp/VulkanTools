@@ -57,6 +57,8 @@ static PFN_vkVoidFunction devmemreport_known_core_device_functions(const char* p
 }
 
 static PFN_vkVoidFunction devmemreport_known_device_extension_functions(const char* pName) {
+    if (strcmp(pName, "vkSetDebugUtilsObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSetDebugUtilsObjectNameEXT);
+    if (strcmp(pName, "vkDebugMarkerSetObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDebugMarkerSetObjectNameEXT);
     return nullptr;
 }
 

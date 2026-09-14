@@ -21,6 +21,20 @@
 #include <string_view>
 #include <vector>
 
+namespace {
+
+/**
+ * @brief Writes one object name to the trace, for consumers to join onto memory events by handle.
+ */
+void EmitDebugObjectName(VkObjectType object_type, uint64_t object_handle, const std::string& name) {
+    TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanObjectName",
+                        "object_type", static_cast<int32_t>(object_type),
+                        "object_handle", object_handle,
+                        "object_name", name);
+}
+
+}  // namespace
+
 DeviceMemoryReport& DeviceMemoryReport::Get() {
     static DeviceMemoryReport instance;
     return instance;
@@ -287,6 +301,8 @@ void DeviceMemoryReport::OnBindImageMemory(uint64_t image_handle, uint64_t memor
 }
 
 void DeviceMemoryReport::RemoveAllocationTracking(uint64_t memory_handle) {
+    debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle));
+
     auto allocation_it = memory_allocations_.find(memory_handle);
     if (allocation_it == memory_allocations_.end()) return;
 
@@ -341,6 +357,54 @@ void DeviceMemoryReport::OnDestroyObject(VkObjectType object_type, uint64_t obje
     std::lock_guard<std::mutex> lock(counter_mutex_);
     RemoveResourceBinding(object_handle);
     resources_.erase(object_handle);
+    debug_object_names_.erase(std::make_pair(object_type, object_handle));
+}
+
+void DeviceMemoryReport::SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name) {
+    // Other types would be trace volume that nothing reads; VK_LAYER_GOOGLE_DebugMarker names them
+    // all for consumers that need it.
+    switch (object_type) {
+        case VK_OBJECT_TYPE_BUFFER:
+        case VK_OBJECT_TYPE_IMAGE:
+        case VK_OBJECT_TYPE_DEVICE_MEMORY:
+            break;
+        default:
+            return;
+    }
+
+    // A null or empty name clears the name, and the clear still has to be published.
+    std::string name_str = name ? name : "";
+    auto key = std::make_pair(object_type, object_handle);
+
+    std::lock_guard<std::mutex> lock(counter_mutex_);
+
+    // Applications re-apply the same name routinely, some every frame, so only emit on a change.
+    auto existing = debug_object_names_.find(key);
+    if (existing != debug_object_names_.end() && existing->second == name_str) {
+        return;
+    }
+    if (existing == debug_object_names_.end() && name_str.empty()) {
+        return;
+    }
+
+    if (name_str.empty()) {
+        debug_object_names_.erase(key);
+    } else {
+        debug_object_names_[key] = name_str;
+    }
+    EmitDebugObjectName(object_type, object_handle, name_str);
+}
+
+std::string DeviceMemoryReport::GetDebugObjectName(VkObjectType object_type, uint64_t object_handle) {
+    std::lock_guard<std::mutex> lock(counter_mutex_);
+    auto it = debug_object_names_.find(std::make_pair(object_type, object_handle));
+    return it != debug_object_names_.end() ? it->second : std::string();
+}
+
+void DeviceMemoryReport::EmitAllDebugObjectNames() {
+    for (const auto& entry : debug_object_names_) {
+        EmitDebugObjectName(entry.first.first, entry.first.second, entry.second);
+    }
 }
 
 void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackDataEXT* pCallbackData) {
