@@ -16,9 +16,11 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef VK_DEVICE_MEMORY_REPORT_FLAG_INTERNAL_OBJECT_BIT_EXT
@@ -58,6 +60,8 @@ const char* GetImageCluster(VkImageUsageFlags usage, VkMemoryPropertyFlags memFl
  * Memory usage counters are reported to Perfetto under:
  * - Driver vs Application allocations (e.g., vulkan.mem.driver.* vs vulkan.mem.app.*)
  * - Usages (vulkan.mem.*.usage.<category>)
+ * - Instant events under the "VulkanDeviceMemoryReport" category ("VulkanMemoryAllocation" and
+ *   "VulkanObjectName")
  *
  * This class is a singleton and provides thread-safe access to its state.
  */
@@ -205,10 +209,43 @@ class DeviceMemoryReport {
     void DumpCurrentCountersAndAllocations();
 
     /**
-     * @brief Handles destruction of a Vulkan object, cleaning up tracked usage state.
+     * @brief Handles destruction of a Vulkan object, cleaning up tracked usage state and any
+     * recorded debug name.
+     *
+     * Handles are only unique within an object type, so @p object_type is required to clear the
+     * destroyed object's name without dropping the name of an unrelated live object that shares
+     * the handle value.
+     *
      * @param object_handle The 64-bit handle of the destroyed Vulkan object.
+     * @param object_type The type of the destroyed object, as a VkObjectType.
      */
-    void OnDestroyObject(uint64_t object_handle);
+    void OnDestroyObject(uint64_t object_handle, VkObjectType object_type = VK_OBJECT_TYPE_UNKNOWN);
+
+    /**
+     * @brief Records the debug name an application gave to a Vulkan object and publishes it.
+     *
+     * Names arrive through VK_EXT_debug_utils or VK_EXT_debug_marker, typically well after the
+     * object was created, so they are published as their own event stream rather than attached to
+     * the memory events. Only the object types this layer attributes memory to are kept.
+     *
+     * @param object_type The type of the object, as a VkObjectType.
+     * @param object_handle The 64-bit handle of the object.
+     * @param name The name given by the application. A null or empty name clears the stored name.
+     */
+    void SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name);
+
+    /**
+     * @brief Records the debug name an application gave to a Vulkan object via the legacy
+     * VK_EXT_debug_marker extension and publishes it.
+     *
+     * Maps the legacy VkDebugReportObjectTypeEXT enum to VkObjectType for the object types this
+     * layer attributes memory to, and ignores all other types.
+     *
+     * @param object_type The type of the object, as a VkDebugReportObjectTypeEXT.
+     * @param object_handle The 64-bit handle of the object.
+     * @param name The name given by the application. A null or empty name clears the stored name.
+     */
+    void SetDebugObjectName(VkDebugReportObjectTypeEXT object_type, uint64_t object_handle, const char* name);
 
    private:
     friend class DeviceMemoryReportTestPeer;
@@ -277,6 +314,11 @@ class DeviceMemoryReport {
     void RemoveAllocationTracking(uint64_t memory_handle);
 
     /**
+     * @brief Republishes every known object name. Called while counter_mutex_ is held.
+     */
+    void EmitAllDebugObjectNames();
+
+    /**
      * @brief Increments trace counter for a memory track.
      */
     void AddCounterBytes(const std::string& track, uint64_t size);
@@ -330,4 +372,17 @@ class DeviceMemoryReport {
      * @brief Maps a usage track name to its current total memory usage in bytes.
      */
     std::unordered_map<std::string, uint64_t> usage_memory_bytes_;
+
+    /**
+     * @brief Maps a pair of (object_type, object_handle) to the name the application gave the object.
+     *
+     * Handles are only unique within an object type, hence the pair key. Like resources_ and
+     * memory_allocations_, keys are not scoped by VkDevice, and entries persist across
+     * OnDestroyDevice until the object itself is destroyed or Reset() is called. Objects not
+     * destroyed through vkDestroyImage, vkDestroyBuffer, or vkFreeMemory (such as presentable
+     * VkImages owned by a VkSwapchainKHR) retain their entries until Reset() or until a recycled
+     * handle is renamed. Guarded by counter_mutex_. std::map is used instead of unordered_map for
+     * pair key support and deterministic replay order.
+     */
+    std::map<std::pair<VkObjectType, uint64_t>, std::string> debug_object_names_;
 };

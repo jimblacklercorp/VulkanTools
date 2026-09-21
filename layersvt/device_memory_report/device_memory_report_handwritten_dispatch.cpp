@@ -61,6 +61,8 @@ static PFN_vkVoidFunction devmemreport_known_device_extension_functions(const ch
     if (strcmp(pName, "vkBindImageMemory2KHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkBindImageMemory2KHR);
     if (strcmp(pName, "vkGetImageMemoryRequirements2KHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkGetImageMemoryRequirements2KHR);
     if (strcmp(pName, "vkGetBufferMemoryRequirements2KHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkGetBufferMemoryRequirements2KHR);
+    if (strcmp(pName, "vkSetDebugUtilsObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSetDebugUtilsObjectNameEXT);
+    if (strcmp(pName, "vkDebugMarkerSetObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDebugMarkerSetObjectNameEXT);
     return nullptr;
 }
 

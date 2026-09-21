@@ -400,7 +400,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice device, const VkImageCreat
 // Intercept image destruction to clean up tracked handle state.
 VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* pAllocator) {
     if (image != VK_NULL_HANDLE) {
-        DeviceMemoryReport::Get().OnDestroyObject(reinterpret_cast<uint64_t>(image));
+        DeviceMemoryReport::Get().OnDestroyObject(reinterpret_cast<uint64_t>(image), VK_OBJECT_TYPE_IMAGE);
     }
     PFN_vkDestroyImage fpDestroyImage = (PFN_vkDestroyImage)device_dispatch_table(device)->DestroyImage;
     if (fpDestroyImage != NULL) {
@@ -429,7 +429,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCre
 // Intercept buffer destruction to clean up tracked handle state.
 VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* pAllocator) {
     if (buffer != VK_NULL_HANDLE) {
-        DeviceMemoryReport::Get().OnDestroyObject(reinterpret_cast<uint64_t>(buffer));
+        DeviceMemoryReport::Get().OnDestroyObject(reinterpret_cast<uint64_t>(buffer), VK_OBJECT_TYPE_BUFFER);
     }
     PFN_vkDestroyBuffer fpDestroyBuffer = (PFN_vkDestroyBuffer)device_dispatch_table(device)->DestroyBuffer;
     if (fpDestroyBuffer != NULL) {
@@ -499,6 +499,35 @@ VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2KHR(VkDevice device, co
         device_dispatch_table(device)->GetBufferMemoryRequirements2KHR(device, pInfo, pMemoryRequirements);
         RecordBufferRequirements2(pInfo, pMemoryRequirements);
     }
+}
+
+// Object naming from VK_EXT_debug_utils.
+VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsObjectNameInfoEXT* pNameInfo) {
+    if (pNameInfo == nullptr) return VK_SUCCESS;
+    auto* table = device_dispatch_table(device);
+    // Naming is informational, so a driver that does not implement it is not an error.
+    VkResult result = (table != nullptr && table->SetDebugUtilsObjectNameEXT != nullptr)
+                          ? table->SetDebugUtilsObjectNameEXT(device, pNameInfo)
+                          : VK_SUCCESS;
+    if (result == VK_SUCCESS) {
+        DeviceMemoryReport::Get().SetDebugObjectName(pNameInfo->objectType, pNameInfo->objectHandle,
+                                                     pNameInfo->pObjectName);
+    }
+    return result;
+}
+
+// Object naming from VK_EXT_debug_marker, the predecessor of VK_EXT_debug_utils.
+VKAPI_ATTR VkResult VKAPI_CALL vkDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebugMarkerObjectNameInfoEXT* pNameInfo) {
+    if (pNameInfo == nullptr) return VK_SUCCESS;
+    auto* table = device_dispatch_table(device);
+    VkResult result = (table != nullptr && table->DebugMarkerSetObjectNameEXT != nullptr)
+                          ? table->DebugMarkerSetObjectNameEXT(device, pNameInfo)
+                          : VK_SUCCESS;
+    if (result == VK_SUCCESS) {
+        DeviceMemoryReport::Get().SetDebugObjectName(pNameInfo->objectType, pNameInfo->object,
+                                                     pNameInfo->pObjectName);
+    }
+    return result;
 }
 
 } // extern "C"

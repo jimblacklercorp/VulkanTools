@@ -260,6 +260,23 @@ void EmitAllocationTraceEvent(const AllocationTraceEvent& event) {
                         "memory_type", event.memory_type);
 }
 
+/**
+ * @brief Writes one object name to the trace, for consumers to join onto memory events by handle.
+ *
+ * Emits a "VulkanObjectName" instant event under the "VulkanDeviceMemoryReport" category with
+ * three debug annotations:
+ *   - "object_type" (int32_t): the VkObjectType value of the named object.
+ *   - "object_handle" (uint64_t): the raw Vulkan handle of the object.
+ *   - "object_name" (string): the debug name assigned to the object, or an empty string when a
+ *     previously assigned name has been cleared.
+ */
+void EmitDebugObjectName(VkObjectType object_type, uint64_t object_handle, std::string_view name) {
+    TRACE_EVENT_INSTANT("VulkanDeviceMemoryReport", "VulkanObjectName",
+                        "object_type", static_cast<int32_t>(object_type),
+                        "object_handle", object_handle,
+                        "object_name", name);
+}
+
 }  // namespace
 
 void DeviceMemoryReport::RemoveResourceBinding(uint64_t resource_handle) {
@@ -352,6 +369,9 @@ void DeviceMemoryReport::RemoveAllocationTracking(uint64_t memory_handle) {
     if (allocation_it == memory_allocations_.end()) return;
 
     auto& allocation = allocation_it->second;
+    if (!allocation.is_driver && allocation.object_type == VK_OBJECT_TYPE_DEVICE_MEMORY) {
+        debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle));
+    }
     for (const auto& suballocation : allocation.sub_allocations) {
         SubtractCounterBytes(suballocation.usage_track, suballocation.size);
         auto resource_iterator = resources_.find(suballocation.resource_handle);
@@ -402,6 +422,7 @@ void DeviceMemoryReport::Reset() {
     resource_to_memory_map_.clear();
     memory_allocations_.clear();
     usage_memory_bytes_.clear();
+    debug_object_names_.clear();
 }
 void DeviceMemoryReport::OnCreateImage(uint64_t image_handle, VkImageUsageFlags usage) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
@@ -428,10 +449,76 @@ void DeviceMemoryReport::OnCreateBuffer(uint64_t buffer_handle, VkBufferUsageFla
     }
 }
 
-void DeviceMemoryReport::OnDestroyObject(uint64_t object_handle) {
+void DeviceMemoryReport::OnDestroyObject(uint64_t object_handle, VkObjectType object_type) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
     RemoveResourceBinding(object_handle);
     resources_.erase(object_handle);
+    if (object_type != VK_OBJECT_TYPE_UNKNOWN) {
+        debug_object_names_.erase(std::make_pair(object_type, object_handle));
+    }
+}
+
+void DeviceMemoryReport::SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name) {
+    // Other types would be trace volume that nothing reads; VK_LAYER_GOOGLE_DebugMarker names them
+    // all for consumers that need it.
+    switch (object_type) {
+        case VK_OBJECT_TYPE_BUFFER:
+        case VK_OBJECT_TYPE_IMAGE:
+        case VK_OBJECT_TYPE_DEVICE_MEMORY:
+            break;
+        default:
+            return;
+    }
+
+    // A null or empty name clears the name, and the clear still has to be published. A view, not a
+    // string: the overwhelmingly common call is an application re-applying a name that has not
+    // changed, some do it every frame, and that path must not allocate.
+    const std::string_view new_name = name ? std::string_view(name) : std::string_view();
+    const auto key = std::make_pair(object_type, object_handle);
+
+    std::lock_guard<std::mutex> lock(counter_mutex_);
+
+    auto existing = debug_object_names_.find(key);
+    if (existing == debug_object_names_.end()) {
+        // Nothing stored and nothing to store: no state change to publish.
+        if (new_name.empty()) return;
+        debug_object_names_.emplace(key, new_name);
+    } else if (existing->second == new_name) {
+        // Applications re-apply the same name routinely, so only a change is worth publishing.
+        return;
+    } else if (new_name.empty()) {
+        debug_object_names_.erase(existing);
+    } else {
+        // Assigning in place reuses the capacity already allocated for the previous name.
+        existing->second.assign(new_name);
+    }
+    EmitDebugObjectName(object_type, object_handle, new_name);
+}
+
+void DeviceMemoryReport::SetDebugObjectName(VkDebugReportObjectTypeEXT object_type, uint64_t object_handle, const char* name) {
+    // VK_EXT_debug_marker names objects with the legacy VkDebugReportObjectTypeEXT enum. Only the
+    // types this layer attributes memory to are mapped.
+    VkObjectType mapped_type = VK_OBJECT_TYPE_UNKNOWN;
+    switch (object_type) {
+        case VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT:
+            mapped_type = VK_OBJECT_TYPE_BUFFER;
+            break;
+        case VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT:
+            mapped_type = VK_OBJECT_TYPE_IMAGE;
+            break;
+        case VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_MEMORY_EXT:
+            mapped_type = VK_OBJECT_TYPE_DEVICE_MEMORY;
+            break;
+        default:
+            return;
+    }
+    SetDebugObjectName(mapped_type, object_handle, name);
+}
+
+void DeviceMemoryReport::EmitAllDebugObjectNames() {
+    for (const auto& entry : debug_object_names_) {
+        EmitDebugObjectName(entry.first.first, entry.first.second, entry.second);
+    }
 }
 
 void DeviceMemoryReport::DumpCurrentCountersAndAllocations() {
@@ -476,6 +563,11 @@ void DeviceMemoryReport::DumpCurrentCountersAndAllocations() {
             });
         }
     }
+
+    // Names are replayed after the allocations for the same reason they are replayed at all: a
+    // session that attaches mid-run never saw the naming calls, and a name with no allocation to
+    // attach to is meaningless.
+    EmitAllDebugObjectNames();
 }
 
 void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackDataEXT* pCallbackData) {
@@ -552,6 +644,7 @@ void DeviceMemoryReport::OnAllocateMemory(VkDevice device, VkDeviceMemory memory
     } else {
         allocation.total_size = size;
         allocation.is_driver = false;
+        allocation.object_type = VK_OBJECT_TYPE_DEVICE_MEMORY;
         allocation.object_handle = handle;
         UpdateAllocationUnboundCounter(handle);
 
@@ -569,8 +662,9 @@ void DeviceMemoryReport::OnAllocateMemory(VkDevice device, VkDeviceMemory memory
 
 void DeviceMemoryReport::OnFreeMemory(VkDevice device, VkDeviceMemory memory) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
-    if (has_callback_map_[device]) return;
     uint64_t handle = reinterpret_cast<uint64_t>(memory);
+    debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, handle));
+    if (has_callback_map_[device]) return;
     auto allocation_iterator = memory_allocations_.find(handle);
     if (allocation_iterator == memory_allocations_.end()) return;
 

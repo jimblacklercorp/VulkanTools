@@ -665,6 +665,13 @@ public:
         }
         return it->second;
     }
+
+    static std::string GetDebugObjectName(VkObjectType object_type, uint64_t object_handle) {
+        auto& report = DeviceMemoryReport::Get();
+        std::lock_guard<std::mutex> lock(report.counter_mutex_);
+        auto it = report.debug_object_names_.find(std::make_pair(object_type, object_handle));
+        return it != report.debug_object_names_.end() ? it->second : std::string();
+    }
 };
 
 TEST_F(DeviceMemoryReportTests, MemoryReportSnapshotDump) {
@@ -715,8 +722,8 @@ TEST_F(DeviceMemoryReportTests, MemoryReportSnapshotDump) {
     callback_data.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
     DeviceMemoryReport::MemoryReportCallback(&callback_data, nullptr);
 
-    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle);
-    DeviceMemoryReport::Get().OnDestroyObject(image_handle);
+    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(image_handle, VK_OBJECT_TYPE_IMAGE);
 
     // Verify post-destruction state
     EXPECT_FALSE(DeviceMemoryReportTestPeer::FindAllocation(memory_handle).has_value());
@@ -725,3 +732,157 @@ TEST_F(DeviceMemoryReportTests, MemoryReportSnapshotDump) {
 }
 
 
+TEST_F(DeviceMemoryReportTests, DebugObjectNames) {
+    TEST_DESCRIPTION("Test that object names are recorded for the object types the layer attributes memory to");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    const uint64_t buffer_handle = 0xE001;
+    const uint64_t image_handle = 0xE002;
+    const uint64_t memory_handle = 0xE003;
+
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "vertex_buffer");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle, "albedo_texture");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle, "scene_heap");
+
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "vertex_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle), "albedo_texture");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle), "scene_heap");
+
+    // Handles are only unique within an object type, so the same handle can carry a different name
+    // for a different type.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_IMAGE, buffer_handle, "shadow_map");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "vertex_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, buffer_handle), "shadow_map");
+
+    // Renaming replaces the stored name.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "index_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "index_buffer");
+
+    // Re-applying the same name preserves state and suppresses a duplicate trace emission (the
+    // TRACE_EVENT_INSTANT output is consumed by Perfetto and cannot be counted directly here).
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "index_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "index_buffer");
+
+    // A null name clears the name rather than recording a placeholder, and clearing an already
+    // unnamed object is a no-op.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, nullptr);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "");
+
+    // Object types the memory view cannot attribute memory to are not tracked at all.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_PIPELINE, 0xE004, "lighting_pipeline");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_PIPELINE, 0xE004), "");
+
+    // Unnamed objects report no name.
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, 0xE005), "");
+}
+
+TEST_F(DeviceMemoryReportTests, DebugObjectNamesSurviveSnapshotDump) {
+    TEST_DESCRIPTION("Test that a snapshot dump replays object names for sessions that attach late");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    const uint64_t buffer_handle = 0xE101;
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "persistent_buffer");
+
+    DeviceMemoryReport::Get().DumpCurrentCountersAndAllocations();
+
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "persistent_buffer");
+}
+
+TEST_F(DeviceMemoryReportTests, DebugObjectNamesDestroyedOnObjectDestroy) {
+    TEST_DESCRIPTION("Test that debug names are cleared when objects are destroyed or freed");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    const uint64_t buffer_handle = 0xE201;
+    const uint64_t image_handle = 0xE202;
+    const uint64_t memory_handle = 0xE203;
+
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle, "temp_buffer");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle, "temp_image");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle, "temp_memory");
+
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "temp_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle), "temp_image");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle), "temp_memory");
+
+    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle, VK_OBJECT_TYPE_BUFFER);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle), "temp_image");
+
+    DeviceMemoryReport::Get().OnDestroyObject(image_handle, VK_OBJECT_TYPE_IMAGE);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle), "");
+
+    VkDevice dummy_device = reinterpret_cast<VkDevice>(0xD001);
+    VkDeviceMemory dummy_memory = reinterpret_cast<VkDeviceMemory>(memory_handle);
+    DeviceMemoryReport::Get().OnAllocateMemory(dummy_device, dummy_memory, 1024, 0, 0);
+    DeviceMemoryReport::Get().OnFreeMemory(dummy_device, dummy_memory);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle), "");
+}
+
+TEST_F(DeviceMemoryReportTests, DebugObjectNameClearOnlyAffectsItsOwnType) {
+    TEST_DESCRIPTION("Test that clearing the name of a destroyed object spares a same-numbered object of another type");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    // Handles are only unique within an object type, so a buffer, an image, a device memory
+    // allocation, and a driver memoryObjectId can legitimately carry the same numeric value.
+    const uint64_t shared_handle = 0xE301;
+
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_BUFFER, shared_handle, "collided_buffer");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_IMAGE, shared_handle, "collided_image");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, shared_handle, "collided_memory");
+
+    DeviceMemoryReport::Get().OnDestroyObject(shared_handle, VK_OBJECT_TYPE_BUFFER);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, shared_handle), "");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, shared_handle), "collided_image");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, shared_handle), "collided_memory");
+
+    // Freeing a driver-internal allocation whose memoryObjectId matches shared_handle must not
+    // erase the live VkDeviceMemory's debug name.
+    VkDeviceMemoryReportCallbackDataEXT driver_cb = {};
+    driver_cb.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_REPORT_CALLBACK_DATA_EXT;
+    driver_cb.flags = VK_DEVICE_MEMORY_REPORT_FLAG_INTERNAL_OBJECT_BIT_EXT;
+    driver_cb.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT;
+    driver_cb.memoryObjectId = shared_handle;
+    driver_cb.size = 4096;
+    driver_cb.objectType = VK_OBJECT_TYPE_DEVICE_MEMORY;
+    driver_cb.objectHandle = 0x9999;
+    DeviceMemoryReport::MemoryReportCallback(&driver_cb, nullptr);
+    driver_cb.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
+    DeviceMemoryReport::MemoryReportCallback(&driver_cb, nullptr);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, shared_handle), "collided_memory");
+
+    DeviceMemoryReport::Get().OnDestroyObject(shared_handle, VK_OBJECT_TYPE_IMAGE);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, shared_handle), "");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, shared_handle), "collided_memory");
+}
+
+TEST_F(DeviceMemoryReportTests, DebugObjectNamesLegacyDebugReportTypes) {
+    TEST_DESCRIPTION("Test that VK_EXT_debug_marker object types map to their VkObjectType counterparts");
+
+    InitializeDeviceMemoryReportPerfetto();
+
+    const uint64_t buffer_handle = 0xE401;
+    const uint64_t image_handle = 0xE402;
+    const uint64_t memory_handle = 0xE403;
+
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT, buffer_handle, "marker_buffer");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT, image_handle, "marker_image");
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_MEMORY_EXT, memory_handle, "marker_memory");
+
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "marker_buffer");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, image_handle), "marker_image");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle), "marker_memory");
+
+    // Clearing through the legacy overload clears the underlying VkObjectType entry.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT, buffer_handle, nullptr);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer_handle), "");
+
+    // Untracked legacy object types are ignored.
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_EXT, 0xE404, "marker_pipeline");
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_PIPELINE, 0xE404), "");
+}
