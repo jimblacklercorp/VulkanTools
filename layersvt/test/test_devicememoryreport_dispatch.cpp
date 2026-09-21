@@ -21,6 +21,7 @@
 // Vulkan implementation.
 
 #include "device_memory_report.h"
+#include "object_names/vulkan_object_names.h"
 #include "vk_layer_table.h"
 
 #include <vulkan/vulkan.h>
@@ -39,6 +40,12 @@ VkDeviceSize g_image_requirements_size = 0;
 // Number of times the stub driver's memory requirement queries were called.
 int g_buffer_requirements_queries = 0;
 int g_image_requirements_queries = 0;
+
+// Whether the stub driver implements the object naming entry points, and how often it saw them.
+// The layer must only intercept naming calls when the driver below actually supports them.
+bool g_supports_object_names = false;
+int g_set_debug_utils_object_name_calls = 0;
+int g_debug_marker_set_object_name_calls = 0;
 
 template <typename HandleType>
 HandleType MakeHandle(uintptr_t value) {
@@ -92,9 +99,24 @@ VKAPI_ATTR void VKAPI_CALL StubGetImageMemoryRequirements(VkDevice, VkImage, VkM
     pMemoryRequirements->memoryTypeBits = 1;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL StubSetDebugUtilsObjectNameEXT(VkDevice, const VkDebugUtilsObjectNameInfoEXT*) {
+    ++g_set_debug_utils_object_name_calls;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL StubDebugMarkerSetObjectNameEXT(VkDevice, const VkDebugMarkerObjectNameInfoEXT*) {
+    ++g_debug_marker_set_object_name_calls;
+    return VK_SUCCESS;
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const char* pName) {
     if (pName == nullptr) return nullptr;
     const std::string name(pName);
+
+    if (g_supports_object_names) {
+        if (name == "vkSetDebugUtilsObjectNameEXT") return reinterpret_cast<PFN_vkVoidFunction>(StubSetDebugUtilsObjectNameEXT);
+        if (name == "vkDebugMarkerSetObjectNameEXT") return reinterpret_cast<PFN_vkVoidFunction>(StubDebugMarkerSetObjectNameEXT);
+    }
 
     if (name == "vkCreateImage") return reinterpret_cast<PFN_vkVoidFunction>(StubCreateImage);
     if (name == "vkDestroyImage") return reinterpret_cast<PFN_vkVoidFunction>(StubDestroyImage);
@@ -140,14 +162,20 @@ class DeviceMemoryReportDispatchTests : public ::testing::Test {
    protected:
     void SetUp() override {
         DeviceMemoryReport::Get().Reset();
+        layersvt::VulkanObjectNames::Get().Clear();
         g_buffer_requirements_size = 0;
         g_image_requirements_size = 0;
         g_buffer_requirements_queries = 0;
         g_image_requirements_queries = 0;
+        g_supports_object_names = false;
+        g_set_debug_utils_object_name_calls = 0;
+        g_debug_marker_set_object_name_calls = 0;
     }
 
     void TearDown() override {
         DeviceMemoryReport::Get().Reset();
+        layersvt::VulkanObjectNames::Get().Clear();
+        g_supports_object_names = false;
     }
 };
 
@@ -276,6 +304,65 @@ TEST_F(DeviceMemoryReportDispatchTests, BindImageMemory2SkipsDisjointImagePlaneB
 
     EXPECT_EQ(g_image_requirements_queries, 0);
     EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 0u);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, ObjectNameEntryPointsHiddenWhenDriverLacksSupport) {
+    // The layer does not claim VK_EXT_debug_utils or VK_EXT_debug_marker. Handing out an
+    // interceptor for a command the driver does not implement would make the application believe
+    // the extension is available.
+    g_supports_object_names = false;
+    FakeDevice device;
+
+    EXPECT_EQ(vkGetDeviceProcAddr(device.handle(), "vkSetDebugUtilsObjectNameEXT"), nullptr);
+    EXPECT_EQ(vkGetDeviceProcAddr(device.handle(), "vkDebugMarkerSetObjectNameEXT"), nullptr);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, ObjectNameEntryPointsInterceptedWhenDriverSupportsThem) {
+    g_supports_object_names = true;
+    FakeDevice device;
+
+    PFN_vkVoidFunction debug_utils = vkGetDeviceProcAddr(device.handle(), "vkSetDebugUtilsObjectNameEXT");
+    PFN_vkVoidFunction debug_marker = vkGetDeviceProcAddr(device.handle(), "vkDebugMarkerSetObjectNameEXT");
+
+    // The layer's own interceptors must be returned, not the driver's implementations.
+    EXPECT_EQ(debug_utils, reinterpret_cast<PFN_vkVoidFunction>(vkSetDebugUtilsObjectNameEXT));
+    EXPECT_EQ(debug_marker, reinterpret_cast<PFN_vkVoidFunction>(vkDebugMarkerSetObjectNameEXT));
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, SetDebugUtilsObjectNameRecordsAndForwards) {
+    g_supports_object_names = true;
+    FakeDevice device;
+    VkBuffer buffer = MakeHandle<VkBuffer>(0xC1000);
+
+    VkDebugUtilsObjectNameInfoEXT name_info = {};
+    name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    name_info.objectType = VK_OBJECT_TYPE_BUFFER;
+    name_info.objectHandle = AsObjectHandle(buffer);
+    name_info.pObjectName = "VertexBuffer";
+
+    EXPECT_EQ(vkSetDebugUtilsObjectNameEXT(device.handle(), &name_info), VK_SUCCESS);
+
+    EXPECT_TRUE(layersvt::VulkanObjectNames::Get().HasObjectName(VK_OBJECT_TYPE_BUFFER, AsObjectHandle(buffer), "VertexBuffer"));
+    // The application's call must still reach the driver.
+    EXPECT_EQ(g_set_debug_utils_object_name_calls, 1);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, DebugMarkerSetObjectNameRecordsAndForwards) {
+    g_supports_object_names = true;
+    FakeDevice device;
+    VkImage image = MakeHandle<VkImage>(0xC2000);
+
+    VkDebugMarkerObjectNameInfoEXT name_info = {};
+    name_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
+    name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+    name_info.object = AsObjectHandle(image);
+    name_info.pObjectName = "ShadowMap";
+
+    EXPECT_EQ(vkDebugMarkerSetObjectNameEXT(device.handle(), &name_info), VK_SUCCESS);
+
+    // Stored against the modern object type, exactly as the DebugMarker layer would store it.
+    EXPECT_TRUE(layersvt::VulkanObjectNames::Get().HasObjectName(VK_OBJECT_TYPE_IMAGE, AsObjectHandle(image), "ShadowMap"));
+    EXPECT_EQ(g_debug_marker_set_object_name_calls, 1);
 }
 
 }  // namespace

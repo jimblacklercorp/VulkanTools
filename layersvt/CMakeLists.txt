@@ -210,10 +210,13 @@ if(BUILD_DEVICEMEMORYREPORT)
     target_sources(VkLayer_DeviceMemoryReport PRIVATE
         device_memory_report/device_memory_report_handwritten_dispatch.cpp
         device_memory_report/device_memory_report_handwritten_functions.h
+        device_memory_report/device_memory_report_handwritten_functions_object_names.h
         device_memory_report/device_memory_report.h
         device_memory_report/device_memory_report.cpp
         device_memory_report/device_memory_report_perfetto.h
         device_memory_report/device_memory_report_perfetto.cpp
+        object_names/vulkan_object_names.h
+        object_names/vulkan_object_names.cpp
         perfetto/perfetto.cc
         vk_layer_table.cpp
         vk_layer_table.h

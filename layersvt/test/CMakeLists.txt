@@ -38,7 +38,7 @@ function(LayerTest NAME)
         target_sources(${TEST_NAME} PRIVATE ../debug_marker/debug_marker.cpp ../debug_marker/debug_marker_perfetto.cpp ../object_names/vulkan_object_names.cpp ../perfetto/perfetto.cc)
         target_include_directories(${TEST_NAME} PRIVATE .. ../debug_marker)
     elseif (${NAME} STREQUAL "DeviceMemoryReport")
-        target_sources(${TEST_NAME} PRIVATE ../device_memory_report/device_memory_report.cpp ../device_memory_report/device_memory_report_perfetto.cpp ../perfetto/perfetto.cc)
+        target_sources(${TEST_NAME} PRIVATE ../device_memory_report/device_memory_report.cpp ../device_memory_report/device_memory_report_perfetto.cpp ../object_names/vulkan_object_names.cpp ../perfetto/perfetto.cc)
         target_include_directories(${TEST_NAME} PRIVATE .. ../device_memory_report)
     endif()
     target_compile_definitions(${TEST_NAME} PUBLIC LAYER_BINARY_PATH="$<TARGET_FILE_DIR:VkLayer_${NAME}>")
@@ -72,6 +72,7 @@ if (TARGET VkLayer_DeviceMemoryReport)
                    ../device_memory_report/device_memory_report_handwritten_dispatch.cpp
                    ../device_memory_report/device_memory_report.cpp
                    ../device_memory_report/device_memory_report_perfetto.cpp
+                   ../object_names/vulkan_object_names.cpp
                    ../perfetto/perfetto.cc
                    ../vk_layer_table.cpp)
     target_include_directories(test_DeviceMemoryReport_dispatch PRIVATE .. ../device_memory_report)
@@ -85,7 +86,6 @@ if (TARGET VkLayer_DeviceMemoryReport)
       set_property(TARGET test_DeviceMemoryReport_dispatch PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 endif()
-
 
 # Unit tests for the object name bookkeeping shared by the DebugMarker and DeviceMemoryReport
 # layers. The component deliberately has no Perfetto dependency (layers supply the emitter), so
@@ -102,3 +102,4 @@ set_target_properties(test_ObjectNames PROPERTIES FOLDER "layers/ObjectNames/Tes
 if(WIN32 AND (QT_TARGET_TYPE STREQUAL STATIC_LIBRARY))
   set_property(TARGET test_ObjectNames PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
+

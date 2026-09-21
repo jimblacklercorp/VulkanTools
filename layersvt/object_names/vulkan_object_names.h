@@ -58,9 +58,17 @@ struct VulkanObjectName {
  * its own category set. Resolving the emitter at link time keeps this component free of any
  * Perfetto dependency.
  *
- * The representation is left to the layer as well. DebugMarker writes a
- * VulkanApiEvent.VkDebugUtilsObjectName trace packet, for which vulkan_object_names_perfetto.h
- * provides a ready-made implementation.
+ * The layers deliberately emit *different representations*, because their names are read back by
+ * different consumers:
+ *
+ * - DebugMarker writes a VulkanApiEvent.VkDebugUtilsObjectName trace packet (see
+ *   vulkan_object_names_perfetto.h). Perfetto's trace_processor folds those into an internal map and
+ *   uses it to label GPU render stage slices with their render pass, render target and command
+ *   buffer names.
+ * - DeviceMemoryReport writes a "VulkanObjectName" track event instead, because trace_processor only
+ *   resolves that internal map for those three render stage object types. A name on a VkBuffer or
+ *   VkImage would be parsed and then never read, so the memory layer publishes names as ordinary
+ *   instant events that its consumer can query directly.
  *
  * @param object_name The object name to write. Called with the store's mutex held, so
  *        implementations must not call back into VulkanObjectNames.
