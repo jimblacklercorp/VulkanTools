@@ -15,6 +15,7 @@
 
 #include "layer_test_helper.h"
 #include "../debug_marker/debug_marker.h"
+#include "../object_names/vulkan_object_names.h"
 #include <vulkan/vulkan_core.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
@@ -32,7 +33,10 @@ class DebugMarkerTests : public VkTestFramework {
 TEST_F(DebugMarkerTests, CombinedTest) {
     TEST_DESCRIPTION("Combined test for DebugMarker layer");
 
+    auto& object_names = layersvt::VulkanObjectNames::Get();
+
     DebugMarker::Get().Clear();
+    object_names.Clear();
     layer_test::VulkanInstanceBuilder inst_builder;
     inst_builder.AddExtension("VK_EXT_debug_utils");
     VkResult err = inst_builder.Init(kLayerName);
@@ -49,16 +53,16 @@ TEST_F(DebugMarkerTests, CombinedTest) {
     EXPECT_NE(pfnCmdDebugMarkerBeginEXT, nullptr);
 
     // 1. Set instance name
-    DebugMarker::Get().SetDebugObjectName(0, VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance");
+    object_names.SetObjectName(0, VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance");
 
-    EXPECT_TRUE(DebugMarker::Get().HasDebugObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance"));
+    EXPECT_TRUE(object_names.HasObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance"));
 
     // 2. Override new name
-    DebugMarker::Get().SetDebugObjectName(0, VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed");
-    EXPECT_TRUE(DebugMarker::Get().HasDebugObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed"));
-    EXPECT_FALSE(DebugMarker::Get().HasDebugObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance"));
+    object_names.SetObjectName(0, VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed");
+    EXPECT_TRUE(object_names.HasObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed"));
+    EXPECT_FALSE(object_names.HasObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstance"));
 
     // 3. Clear
-    DebugMarker::Get().Clear();
-    EXPECT_FALSE(DebugMarker::Get().HasDebugObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed"));
+    object_names.Clear();
+    EXPECT_FALSE(object_names.HasObjectName(VK_OBJECT_TYPE_INSTANCE, (uint64_t)instance, "MyInstanceRenamed"));
 }

@@ -175,6 +175,9 @@ if(BUILD_DEBUGMARKER)
         debug_marker/debug_marker.cpp
         debug_marker/debug_marker_perfetto.h
         debug_marker/debug_marker_perfetto.cpp
+        object_names/vulkan_object_names.h
+        object_names/vulkan_object_names.cpp
+        object_names/vulkan_object_names_perfetto.h
         perfetto/perfetto.cc
         vk_layer_table.cpp
         vk_layer_table.h

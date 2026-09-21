@@ -35,7 +35,7 @@ function(LayerTest NAME)
     add_dependencies(${TEST_NAME} VkLayer_${NAME})
     target_link_libraries(${TEST_NAME} Vulkan::Headers Vulkan::Loader GTest::gtest GTest::gtest_main Vulkan::LayerSettings)
     if (${NAME} STREQUAL "DebugMarker")
-        target_sources(${TEST_NAME} PRIVATE ../debug_marker/debug_marker.cpp ../debug_marker/debug_marker_perfetto.cpp ../perfetto/perfetto.cc)
+        target_sources(${TEST_NAME} PRIVATE ../debug_marker/debug_marker.cpp ../debug_marker/debug_marker_perfetto.cpp ../object_names/vulkan_object_names.cpp ../perfetto/perfetto.cc)
         target_include_directories(${TEST_NAME} PRIVATE .. ../debug_marker)
     elseif (${NAME} STREQUAL "DeviceMemoryReport")
         target_sources(${TEST_NAME} PRIVATE ../device_memory_report/device_memory_report.cpp ../device_memory_report/device_memory_report_perfetto.cpp ../perfetto/perfetto.cc)
@@ -86,3 +86,19 @@ if (TARGET VkLayer_DeviceMemoryReport)
     endif()
 endif()
 
+
+# Unit tests for the object name bookkeeping shared by the DebugMarker and DeviceMemoryReport
+# layers. The component deliberately has no Perfetto dependency (layers supply the emitter), so
+# neither Perfetto nor the Vulkan loader is linked here.
+add_executable(test_ObjectNames
+               test_objectnames.cpp
+               ../object_names/vulkan_object_names.cpp)
+target_include_directories(test_ObjectNames PRIVATE ..)
+target_link_libraries(test_ObjectNames Vulkan::Headers GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_ObjectNames PRIVATE VK_ENABLE_BETA_EXTENSIONS)
+add_test(NAME test_ObjectNames COMMAND test_ObjectNames)
+set_target_properties(test_ObjectNames PROPERTIES FOLDER "layers/ObjectNames/Test")
+
+if(WIN32 AND (QT_TARGET_TYPE STREQUAL STATIC_LIBRARY))
+  set_property(TARGET test_ObjectNames PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()

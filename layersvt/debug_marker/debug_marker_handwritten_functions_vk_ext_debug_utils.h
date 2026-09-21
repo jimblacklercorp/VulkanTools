@@ -17,7 +17,7 @@
 
 #include <vulkan/vulkan.h>
 #include "vk_layer_table.h"
-#include "debug_marker.h"
+#include "object_names/vulkan_object_names.h"
 
 extern "C" {
 
@@ -49,7 +49,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdInsertDebugUtilsLabelEXT(VkCommandBuffer command
 
 // Required for VK_EXT_debug_utils. Tracks object name state.
 VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsObjectNameInfoEXT* pNameInfo) {
-    DebugMarker::Get().SetDebugObjectName((uint64_t)device, (int32_t)pNameInfo->objectType, pNameInfo->objectHandle, pNameInfo->pObjectName);
+    layersvt::VulkanObjectNames::Get().SetObjectName(device, pNameInfo);
     if (device_dispatch_table(device)->SetDebugUtilsObjectNameEXT) {
         VkResult result = device_dispatch_table(device)->SetDebugUtilsObjectNameEXT(device, pNameInfo);
         return result;

@@ -14,14 +14,24 @@
  */
 
 #include "debug_marker_perfetto.h"
-#include "debug_marker.h"
+#include "object_names/vulkan_object_names_perfetto.h"
 
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
+
+namespace layersvt {
+
+// Binds the shared object name store to this layer's track event data source.
+void EmitVulkanObjectName(const VulkanObjectName& object_name) {
+    WriteVulkanObjectNamePacket<perfetto::TrackEvent>(object_name);
+}
+
+}  // namespace layersvt
 
 class MarkerSessionObserver : public perfetto::TrackEventSessionObserver {
  public:
   void OnStart(const perfetto::DataSourceBase::StartArgs&) override {
-    DebugMarker::Get().EmitAllDebugMarkers();
+    // Replay the names of objects that were named before this session started.
+    layersvt::VulkanObjectNames::Get().EmitAll();
   }
 };
 
