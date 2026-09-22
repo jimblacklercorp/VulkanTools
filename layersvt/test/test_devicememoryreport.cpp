@@ -254,18 +254,18 @@ TEST_F(DeviceMemoryReportTests, UsageTypeBreakdown) {
     DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
 
     // Clean up objects
-    DeviceMemoryReport::Get().OnDestroyObject(color_img);
-    DeviceMemoryReport::Get().OnDestroyObject(depth_img);
-    DeviceMemoryReport::Get().OnDestroyObject(sampled_img);
-    DeviceMemoryReport::Get().OnDestroyObject(storage_img);
-    DeviceMemoryReport::Get().OnDestroyObject(transient_img);
+    DeviceMemoryReport::Get().OnDestroyObject(color_img, VK_OBJECT_TYPE_IMAGE);
+    DeviceMemoryReport::Get().OnDestroyObject(depth_img, VK_OBJECT_TYPE_IMAGE);
+    DeviceMemoryReport::Get().OnDestroyObject(sampled_img, VK_OBJECT_TYPE_IMAGE);
+    DeviceMemoryReport::Get().OnDestroyObject(storage_img, VK_OBJECT_TYPE_IMAGE);
+    DeviceMemoryReport::Get().OnDestroyObject(transient_img, VK_OBJECT_TYPE_IMAGE);
 
-    DeviceMemoryReport::Get().OnDestroyObject(vtx_buf);
-    DeviceMemoryReport::Get().OnDestroyObject(idx_buf);
-    DeviceMemoryReport::Get().OnDestroyObject(ubo_buf);
-    DeviceMemoryReport::Get().OnDestroyObject(staging_buf);
-    DeviceMemoryReport::Get().OnDestroyObject(storage_buf);
-    DeviceMemoryReport::Get().OnDestroyObject(indirect_buf);
+    DeviceMemoryReport::Get().OnDestroyObject(vtx_buf, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(idx_buf, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(ubo_buf, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(staging_buf, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(storage_buf, VK_OBJECT_TYPE_BUFFER);
+    DeviceMemoryReport::Get().OnDestroyObject(indirect_buf, VK_OBJECT_TYPE_BUFFER);
 
     EXPECT_TRUE(true);
 }
@@ -321,7 +321,7 @@ TEST_F(DeviceMemoryReportTests, MemoryAliasingAndOverlap) {
     // - Interval [0, 4000) is removed. Remaining intervals: [2000, 6000) U [8000, 9500).
     // - Recalculated bound_size = 4,000 + 1,500 = 5,500 B.
     // - Updated unbound headroom: unbound_memory = 10,000 - 5,500 = 4,500 B.
-    DeviceMemoryReport::Get().OnDestroyObject(image_a);
+    DeviceMemoryReport::Get().OnDestroyObject(image_a, VK_OBJECT_TYPE_IMAGE);
 
     // Step 6: Free physical memory slab.
     // - All remaining sub-allocations on this slab are cleaned up and unbound counter is reset.
@@ -329,8 +329,8 @@ TEST_F(DeviceMemoryReportTests, MemoryAliasingAndOverlap) {
     DeviceMemoryReport::MemoryReportCallback(&cb_data, nullptr);
 
     // Step 7: Clean up remaining virtual resource object handles.
-    DeviceMemoryReport::Get().OnDestroyObject(image_b);
-    DeviceMemoryReport::Get().OnDestroyObject(buffer_c);
+    DeviceMemoryReport::Get().OnDestroyObject(image_b, VK_OBJECT_TYPE_IMAGE);
+    DeviceMemoryReport::Get().OnDestroyObject(buffer_c, VK_OBJECT_TYPE_BUFFER);
 
     EXPECT_TRUE(true);
 }
@@ -538,7 +538,7 @@ TEST_F(DeviceMemoryReportTests, DriverVsAppUnboundMemoryAttribution) {
     DeviceMemoryReport::MemoryReportCallback(&application_callback_data, nullptr);
     EXPECT_EQ(DeviceMemoryReport::Get().GetUsageCounterBytes("vulkan.mem.app.usage.unbound_memory"), 0u);
 
-    DeviceMemoryReport::Get().OnDestroyObject(shared_handle);
+    DeviceMemoryReport::Get().OnDestroyObject(shared_handle, VK_OBJECT_TYPE_IMAGE);
 
     // Case 3: Driver allocation arrives before OnCreateBuffer (tests re-attribution)
     uint64_t buffer_handle = 0xF002;
@@ -565,7 +565,7 @@ TEST_F(DeviceMemoryReportTests, DriverVsAppUnboundMemoryAttribution) {
     buffer_callback_data.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
     DeviceMemoryReport::MemoryReportCallback(&buffer_callback_data, nullptr);
     EXPECT_EQ(DeviceMemoryReport::Get().GetUsageCounterBytes("vulkan.mem.driver.usage.geometry_mesh"), 0u);
-    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle);
+    DeviceMemoryReport::Get().OnDestroyObject(buffer_handle, VK_OBJECT_TYPE_BUFFER);
 }
 
 TEST_F(DeviceMemoryReportTests, ProactiveMemoryRequirementsQuery) {

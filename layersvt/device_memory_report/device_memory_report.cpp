@@ -453,9 +453,7 @@ void DeviceMemoryReport::OnDestroyObject(uint64_t object_handle, VkObjectType ob
     std::lock_guard<std::mutex> lock(counter_mutex_);
     RemoveResourceBinding(object_handle);
     resources_.erase(object_handle);
-    if (object_type != VK_OBJECT_TYPE_UNKNOWN) {
-        debug_object_names_.erase(std::make_pair(object_type, object_handle));
-    }
+    debug_object_names_.erase(std::make_pair(object_type, object_handle));
 }
 
 void DeviceMemoryReport::SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name) {

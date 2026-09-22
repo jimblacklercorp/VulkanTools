@@ -219,7 +219,7 @@ class DeviceMemoryReport {
      * @param object_handle The 64-bit handle of the destroyed Vulkan object.
      * @param object_type The type of the destroyed object, as a VkObjectType.
      */
-    void OnDestroyObject(uint64_t object_handle, VkObjectType object_type = VK_OBJECT_TYPE_UNKNOWN);
+    void OnDestroyObject(uint64_t object_handle, VkObjectType object_type);
 
     /**
      * @brief Records the debug name an application gave to a Vulkan object and publishes it.
