@@ -740,6 +740,26 @@ TEST_F(DeviceMemoryReportTests, DebugObjectNamesDestroyedOnObjectDestroy) {
     DeviceMemoryReport::Get().OnAllocateMemory(dummy_device, dummy_memory, 1024, 0, 0);
     DeviceMemoryReport::Get().OnFreeMemory(dummy_device, dummy_memory);
     EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle), "");
+
+    // On callback-capable devices, OnFreeMemory must keep the debug name intact until the
+    // VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT callback emits DESTROY.
+    VkDevice callback_device = reinterpret_cast<VkDevice>(0xD002);
+    DeviceMemoryReport::Get().SetHasMemoryReportCallback(callback_device, true);
+    const uint64_t callback_mem_handle = 0xE204;
+    DeviceMemoryReport::Get().SetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, callback_mem_handle, "callback_memory");
+    DeviceMemoryReport::Get().OnFreeMemory(callback_device, reinterpret_cast<VkDeviceMemory>(callback_mem_handle));
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, callback_mem_handle), "callback_memory");
+
+    VkDeviceMemoryReportCallbackDataEXT free_cb = {};
+    free_cb.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_REPORT_CALLBACK_DATA_EXT;
+    free_cb.flags = 0;
+    free_cb.type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
+    free_cb.memoryObjectId = 0x9001;
+    free_cb.size = 1024;
+    free_cb.objectType = VK_OBJECT_TYPE_DEVICE_MEMORY;
+    free_cb.objectHandle = callback_mem_handle;
+    DeviceMemoryReport::MemoryReportCallback(&free_cb, nullptr);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, callback_mem_handle), "");
 }
 
 TEST_F(DeviceMemoryReportTests, DebugObjectNameClearOnlyAffectsItsOwnType) {

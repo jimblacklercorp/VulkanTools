@@ -594,12 +594,12 @@ void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackD
     } else if (pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT ||
                pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_UNIMPORT_EXT) {
         auto allocation_iterator = memory_allocations_.find(key);
-        if (allocation_iterator == memory_allocations_.end()) return;
-
-        memory_type = is_driver ? allocation_iterator->second.cluster_name : "unbound_memory";
-        event_size = allocation_iterator->second.total_size;
-        RemoveAllocationTracking(key);
-        operation_name = "DESTROY";
+        if (allocation_iterator != memory_allocations_.end()) {
+            memory_type = is_driver ? allocation_iterator->second.cluster_name : "unbound_memory";
+            event_size = allocation_iterator->second.total_size;
+            RemoveAllocationTracking(key);
+            operation_name = "DESTROY";
+        }
     }
 
     if (operation_name != nullptr) {
@@ -612,6 +612,13 @@ void DeviceMemoryReport::OnMemoryReportEvent(const VkDeviceMemoryReportCallbackD
             .object_handle = pCallbackData->objectHandle,
             .memory_type = memory_type,
         });
+    }
+
+    const bool is_free = pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT ||
+                         pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_UNIMPORT_EXT;
+    if (is_free && !is_driver && pCallbackData->objectType == VK_OBJECT_TYPE_DEVICE_MEMORY &&
+        debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, key)) > 0) {
+        EmitDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, key, "");
     }
 }
 
@@ -660,24 +667,25 @@ void DeviceMemoryReport::OnAllocateMemory(VkDevice device, VkDeviceMemory memory
 
 void DeviceMemoryReport::OnFreeMemory(VkDevice device, VkDeviceMemory memory) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
+    if (has_callback_map_[device]) return;
+
     uint64_t handle = reinterpret_cast<uint64_t>(memory);
+    auto allocation_iterator = memory_allocations_.find(handle);
+    if (allocation_iterator != memory_allocations_.end()) {
+        VkDeviceSize freed_size = allocation_iterator->second.total_size;
+        RemoveAllocationTracking(handle);
+
+        EmitAllocationTraceEvent({
+            .operation = "DESTROY",
+            .source = "DEVICE_MEMORY",
+            .memory_object_id = handle,
+            .size = freed_size,
+            .offset = 0,
+            .object_handle = handle,
+            .memory_type = "unbound_memory",
+        });
+    }
     if (debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, handle)) > 0) {
         EmitDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, handle, "");
     }
-    if (has_callback_map_[device]) return;
-    auto allocation_iterator = memory_allocations_.find(handle);
-    if (allocation_iterator == memory_allocations_.end()) return;
-
-    VkDeviceSize freed_size = allocation_iterator->second.total_size;
-    RemoveAllocationTracking(handle);
-
-    EmitAllocationTraceEvent({
-        .operation = "DESTROY",
-        .source = "DEVICE_MEMORY",
-        .memory_object_id = handle,
-        .size = freed_size,
-        .offset = 0,
-        .object_handle = handle,
-        .memory_type = "unbound_memory",
-    });
 }
