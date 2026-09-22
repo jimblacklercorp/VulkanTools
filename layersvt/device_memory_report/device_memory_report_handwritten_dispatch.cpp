@@ -109,11 +109,9 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
         if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) {
             return reinterpret_cast<PFN_vkVoidFunction>(devmemreport_EnumerateDeviceExtensionProperties);
         }
-#ifdef __ANDROID__
         if (strcmp(pName, "vkEnumerateDeviceLayerProperties") == 0) {
             return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceLayerProperties);
         }
-#endif
         return nullptr;
     }
 
