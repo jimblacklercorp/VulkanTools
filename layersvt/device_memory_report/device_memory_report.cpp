@@ -511,8 +511,9 @@ void DeviceMemoryReport::SetDebugObjectName(VkDebugReportObjectTypeEXT object_ty
 }
 
 void DeviceMemoryReport::EmitAllDebugObjectNames() {
-    for (const auto& entry : debug_object_names_) {
-        EmitDebugObjectName(entry.first.first, entry.first.second, entry.second);
+    for (const auto& [key, name] : debug_object_names_) {
+        const auto& [object_type, object_handle] = key;
+        EmitDebugObjectName(object_type, object_handle, name);
     }
 }
 
