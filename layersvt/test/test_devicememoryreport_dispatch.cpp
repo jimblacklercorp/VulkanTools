@@ -30,6 +30,16 @@
 #include <cstdint>
 #include <string>
 
+class DeviceMemoryReportTestPeer {
+   public:
+    static std::string GetDebugObjectName(VkObjectType object_type, uint64_t object_handle) {
+        auto& report = DeviceMemoryReport::Get();
+        std::lock_guard<std::mutex> lock(report.counter_mutex_);
+        auto it = report.debug_object_names_.find(std::make_pair(object_type, object_handle));
+        return it != report.debug_object_names_.end() ? it->second : std::string();
+    }
+};
+
 namespace {
 
 // Sizes returned by the stub driver's memory requirement queries.
@@ -39,6 +49,12 @@ VkDeviceSize g_image_requirements_size = 0;
 // Number of times the stub driver's memory requirement queries were called.
 int g_buffer_requirements_queries = 0;
 int g_image_requirements_queries = 0;
+
+// Controls whether the stub driver implements VK_EXT_debug_utils / VK_EXT_debug_marker naming.
+bool g_stub_supports_debug_utils = false;
+bool g_stub_supports_debug_marker = false;
+int g_set_debug_utils_name_calls = 0;
+int g_debug_marker_set_name_calls = 0;
 
 template <typename HandleType>
 HandleType MakeHandle(uintptr_t value) {
@@ -92,6 +108,16 @@ VKAPI_ATTR void VKAPI_CALL StubGetImageMemoryRequirements(VkDevice, VkImage, VkM
     pMemoryRequirements->memoryTypeBits = 1;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL StubSetDebugUtilsObjectNameEXT(VkDevice, const VkDebugUtilsObjectNameInfoEXT*) {
+    ++g_set_debug_utils_name_calls;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL StubDebugMarkerSetObjectNameEXT(VkDevice, const VkDebugMarkerObjectNameInfoEXT*) {
+    ++g_debug_marker_set_name_calls;
+    return VK_SUCCESS;
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const char* pName) {
     if (pName == nullptr) return nullptr;
     const std::string name(pName);
@@ -110,6 +136,12 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const c
     }
     if (name == "vkGetBufferMemoryRequirements") return reinterpret_cast<PFN_vkVoidFunction>(StubGetBufferMemoryRequirements);
     if (name == "vkGetImageMemoryRequirements") return reinterpret_cast<PFN_vkVoidFunction>(StubGetImageMemoryRequirements);
+    if (g_stub_supports_debug_utils && name == "vkSetDebugUtilsObjectNameEXT") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubSetDebugUtilsObjectNameEXT);
+    }
+    if (g_stub_supports_debug_marker && name == "vkDebugMarkerSetObjectNameEXT") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubDebugMarkerSetObjectNameEXT);
+    }
 
     // Everything else is not implemented by the stub driver.
     return nullptr;
@@ -144,6 +176,10 @@ class DeviceMemoryReportDispatchTests : public ::testing::Test {
         g_image_requirements_size = 0;
         g_buffer_requirements_queries = 0;
         g_image_requirements_queries = 0;
+        g_stub_supports_debug_utils = false;
+        g_stub_supports_debug_marker = false;
+        g_set_debug_utils_name_calls = 0;
+        g_debug_marker_set_name_calls = 0;
     }
 
     void TearDown() override {
@@ -276,6 +312,70 @@ TEST_F(DeviceMemoryReportDispatchTests, BindImageMemory2SkipsDisjointImagePlaneB
 
     EXPECT_EQ(g_image_requirements_queries, 0);
     EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 0u);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, SetDebugUtilsObjectNameStandaloneAndChained) {
+    // 1. Standalone: driver/lower layers do not implement vkSetDebugUtilsObjectNameEXT.
+    g_stub_supports_debug_utils = false;
+    FakeDevice standalone_device;
+    VkBuffer buffer = MakeHandle<VkBuffer>(0xB9001);
+
+    auto pfn_set_name = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetDeviceProcAddr(standalone_device.handle(), "vkSetDebugUtilsObjectNameEXT"));
+    ASSERT_NE(pfn_set_name, nullptr);
+
+    VkDebugUtilsObjectNameInfoEXT name_info = {};
+    name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    name_info.objectType = VK_OBJECT_TYPE_BUFFER;
+    name_info.objectHandle = AsObjectHandle(buffer);
+    name_info.pObjectName = "standalone_buffer";
+
+    EXPECT_EQ(pfn_set_name(standalone_device.handle(), &name_info), VK_SUCCESS);
+    EXPECT_EQ(g_set_debug_utils_name_calls, 0);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, AsObjectHandle(buffer)),
+              "standalone_buffer");
+
+    // 2. Chained: driver/lower layer implements vkSetDebugUtilsObjectNameEXT.
+    g_stub_supports_debug_utils = true;
+    FakeDevice chained_device;
+    name_info.pObjectName = "chained_buffer";
+
+    EXPECT_EQ(pfn_set_name(chained_device.handle(), &name_info), VK_SUCCESS);
+    EXPECT_EQ(g_set_debug_utils_name_calls, 1);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, AsObjectHandle(buffer)),
+              "chained_buffer");
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, DebugMarkerSetObjectNameStandaloneAndChained) {
+    // 1. Standalone: driver/lower layers do not implement vkDebugMarkerSetObjectNameEXT.
+    g_stub_supports_debug_marker = false;
+    FakeDevice standalone_device;
+    VkImage image = MakeHandle<VkImage>(0xB9002);
+
+    auto pfn_marker_set_name = reinterpret_cast<PFN_vkDebugMarkerSetObjectNameEXT>(
+        vkGetDeviceProcAddr(standalone_device.handle(), "vkDebugMarkerSetObjectNameEXT"));
+    ASSERT_NE(pfn_marker_set_name, nullptr);
+
+    VkDebugMarkerObjectNameInfoEXT marker_info = {};
+    marker_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
+    marker_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+    marker_info.object = AsObjectHandle(image);
+    marker_info.pObjectName = "standalone_image";
+
+    EXPECT_EQ(pfn_marker_set_name(standalone_device.handle(), &marker_info), VK_SUCCESS);
+    EXPECT_EQ(g_debug_marker_set_name_calls, 0);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, AsObjectHandle(image)),
+              "standalone_image");
+
+    // 2. Chained: driver/lower layer implements vkDebugMarkerSetObjectNameEXT.
+    g_stub_supports_debug_marker = true;
+    FakeDevice chained_device;
+    marker_info.pObjectName = "chained_image";
+
+    EXPECT_EQ(pfn_marker_set_name(chained_device.handle(), &marker_info), VK_SUCCESS);
+    EXPECT_EQ(g_debug_marker_set_name_calls, 1);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, AsObjectHandle(image)),
+              "chained_image");
 }
 
 }  // namespace

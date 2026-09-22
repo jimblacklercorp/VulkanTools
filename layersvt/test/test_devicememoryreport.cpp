@@ -30,6 +30,17 @@ class DeviceMemoryReportTests : public VkTestFramework {
 
     static void SetUpTestSuite() {}
     static void TearDownTestSuite(){};
+
+   protected:
+    void SetUp() override {
+        VkTestFramework::SetUp();
+        DeviceMemoryReport::Get().Reset();
+    }
+
+    void TearDown() override {
+        DeviceMemoryReport::Get().Reset();
+        VkTestFramework::TearDown();
+    }
 };
 
 TEST_F(DeviceMemoryReportTests, InitLayer) {
@@ -75,7 +86,16 @@ TEST_F(DeviceMemoryReportTests, ExtensionProperties) {
     // Test instance extension properties advertised by the layer
     uint32_t inst_ext_count = 0;
     EXPECT_EQ(vkEnumerateInstanceExtensionProperties(kLayerName, &inst_ext_count, nullptr), VK_SUCCESS);
-    EXPECT_EQ(inst_ext_count, 0u);
+    EXPECT_EQ(inst_ext_count, 1u);
+    std::vector<VkExtensionProperties> inst_exts(inst_ext_count);
+    EXPECT_EQ(vkEnumerateInstanceExtensionProperties(kLayerName, &inst_ext_count, inst_exts.data()), VK_SUCCESS);
+    bool found_debug_utils = false;
+    for (const auto& ext : inst_exts) {
+        if (strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+            found_debug_utils = true;
+        }
+    }
+    EXPECT_TRUE(found_debug_utils);
 
     VkPhysicalDevice phys_dev = VK_NULL_HANDLE;
     inst_builder.GetPhysicalDevice(&phys_dev);
@@ -83,16 +103,20 @@ TEST_F(DeviceMemoryReportTests, ExtensionProperties) {
         // Test device extension properties advertised by the layer
         uint32_t dev_ext_count = 0;
         EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, kLayerName, &dev_ext_count, nullptr), VK_SUCCESS);
-        EXPECT_GE(dev_ext_count, 1u);
+        EXPECT_GE(dev_ext_count, 2u);
         std::vector<VkExtensionProperties> dev_exts(dev_ext_count);
         EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, kLayerName, &dev_ext_count, dev_exts.data()), VK_SUCCESS);
         bool found_mem_report = false;
+        bool found_debug_marker = false;
         for (const auto& ext : dev_exts) {
             if (strcmp(ext.extensionName, VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME) == 0) {
                 found_mem_report = true;
+            } else if (strcmp(ext.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0) {
+                found_debug_marker = true;
             }
         }
         EXPECT_TRUE(found_mem_report);
+        EXPECT_TRUE(found_debug_marker);
     }
 
     inst_builder.Reset();
