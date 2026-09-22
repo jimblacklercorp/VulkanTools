@@ -318,6 +318,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL devmemreport_EnumerateDeviceExtensionPrope
     if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
         return result;
     }
+    downstream_extensions.resize(downstream_count);
 
     std::vector<VkExtensionProperties> merged_extensions = std::move(downstream_extensions);
     for (const auto& layer_extension : layer_device_extensions) {
