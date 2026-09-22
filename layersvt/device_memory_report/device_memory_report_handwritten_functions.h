@@ -134,8 +134,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
     // Call the function and create the dispatch table
     chain_info->u.pLayerInfo = chain_info->u.pLayerInfo->pNext;
 
-    // Check if the underlying driver supports VK_EXT_device_memory_report
+    // Check if the underlying driver supports VK_EXT_device_memory_report or VK_EXT_debug_marker.
     bool supports_memory_report = false;
+    bool supports_debug_marker = false;
     uint32_t ext_count = 0;
     if (instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties) {
         if (instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &ext_count, nullptr) == VK_SUCCESS && ext_count > 0) {
@@ -144,18 +145,27 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
                 for (const auto& ext : exts) {
                     if (strcmp(ext.extensionName, VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME) == 0) {
                         supports_memory_report = true;
-                        break;
+                    } else if (strcmp(ext.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0) {
+                        supports_debug_marker = true;
                     }
                 }
             }
         }
     }
 
-    // If supported, inject VK_EXT_device_memory_report callback into pNext chain
+    // Strip layer-advertised device extensions if the underlying driver does not natively support
+    // them, and inject VK_EXT_device_memory_report callback registration when supported.
     VkDeviceCreateInfo modified_create_info = *pCreateInfo;
     std::vector<const char*> enabled_extensions;
     for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i) {
-        enabled_extensions.push_back(pCreateInfo->ppEnabledExtensionNames[i]);
+        const char* name = pCreateInfo->ppEnabledExtensionNames[i];
+        if (!supports_debug_marker && strcmp(name, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0) {
+            continue;
+        }
+        if (!supports_memory_report && strcmp(name, VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME) == 0) {
+            continue;
+        }
+        enabled_extensions.push_back(name);
     }
 
     VkDeviceDeviceMemoryReportCreateInfoEXT memory_report_ci = {};
@@ -170,8 +180,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
         if (!already_enabled) {
             enabled_extensions.push_back(VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME);
         }
-        modified_create_info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
-        modified_create_info.ppEnabledExtensionNames = enabled_extensions.data();
 
         memory_report_ci.sType = VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT;
         memory_report_ci.pfnUserCallback = DeviceMemoryReport::MemoryReportCallback;
@@ -180,7 +188,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
         modified_create_info.pNext = &memory_report_ci;
     }
 
-    VkResult result = fpCreateDevice(physicalDevice, supports_memory_report ? &modified_create_info : pCreateInfo, pAllocator, pDevice);
+    modified_create_info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
+    modified_create_info.ppEnabledExtensionNames = enabled_extensions.empty() ? nullptr : enabled_extensions.data();
+
+    VkResult result = fpCreateDevice(physicalDevice, &modified_create_info, pAllocator, pDevice);
     if (result == VK_SUCCESS) {
         initDeviceTable(*pDevice, fpGetDeviceProcAddr);
         DeviceMemoryReport::Get().SetHasMemoryReportCallback(*pDevice, supports_memory_report);
@@ -227,6 +238,14 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice device, VkDeviceMemory memory, 
 EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(const char* pLayerName,
                                                                                        uint32_t* pPropertyCount,
                                                                                        VkExtensionProperties* pProperties) {
+    static const VkExtensionProperties instanceExtensions[] = {
+        {VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION},
+    };
+
+    if (pLayerName != nullptr && strcmp(pLayerName, LAYER_NAME) == 0) {
+        return util_GetExtensionProperties(ARRAY_SIZE(instanceExtensions), instanceExtensions, pPropertyCount, pProperties);
+    }
+
     return util_GetExtensionProperties(0, nullptr, pPropertyCount, pProperties);
 }
 
@@ -254,6 +273,73 @@ EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceLayerProperties(
 
     return util_GetLayerProperties(ARRAY_SIZE(layerProperties), layerProperties, pPropertyCount, pProperties);
 }
+
+#ifdef __ANDROID__
+EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                                                                    const char* pLayerName,
+                                                                                    uint32_t* pPropertyCount,
+                                                                                    VkExtensionProperties* pProperties) {
+    static const VkExtensionProperties deviceExtensions[] = {
+        {VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, VK_EXT_DEVICE_MEMORY_REPORT_SPEC_VERSION},
+        {VK_EXT_DEBUG_MARKER_EXTENSION_NAME, VK_EXT_DEBUG_MARKER_SPEC_VERSION},
+    };
+
+    if (pLayerName != nullptr) {
+        if (strcmp(pLayerName, LAYER_NAME) == 0) {
+            return util_GetExtensionProperties(ARRAY_SIZE(deviceExtensions), deviceExtensions, pPropertyCount, pProperties);
+        }
+        if (physicalDevice != VK_NULL_HANDLE && instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties) {
+            return instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);
+        }
+        return util_GetExtensionProperties(0, nullptr, pPropertyCount, pProperties);
+    }
+
+    if (physicalDevice == VK_NULL_HANDLE || instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties == nullptr) {
+        return util_GetExtensionProperties(ARRAY_SIZE(deviceExtensions), deviceExtensions, pPropertyCount, pProperties);
+    }
+
+    // Manually append device extensions when pLayerName == nullptr because the Android Vulkan
+    // loader does not expose device extensions from implicit layers (b/143293104).
+    if (pProperties == nullptr) {
+        VkResult res = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, pPropertyCount, nullptr);
+        if (res == VK_SUCCESS && pPropertyCount != nullptr) {
+            (*pPropertyCount) += ARRAY_SIZE(deviceExtensions);
+        }
+        return res;
+    }
+
+    if (pPropertyCount != nullptr && *pPropertyCount > 0) {
+        uint32_t requestedCount = *pPropertyCount;
+        VkResult res = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, pPropertyCount, pProperties);
+        if (res == VK_SUCCESS || res == VK_INCOMPLETE) {
+            uint32_t originalCount = *pPropertyCount;
+            uint32_t additionalCount = 0;
+            for (uint32_t i = 0; i < ARRAY_SIZE(deviceExtensions); ++i) {
+                bool found = false;
+                for (uint32_t j = 0; j < originalCount; ++j) {
+                    if (strcmp(pProperties[j].extensionName, deviceExtensions[i].extensionName) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (originalCount + additionalCount < requestedCount) {
+                        pProperties[originalCount + additionalCount] = deviceExtensions[i];
+                    } else {
+                        res = VK_INCOMPLETE;
+                    }
+                    additionalCount++;
+                }
+            }
+            *pPropertyCount = (originalCount + additionalCount > requestedCount)
+                                  ? requestedCount
+                                  : (originalCount + additionalCount);
+        }
+        return res;
+    }
+    return VK_SUCCESS;
+}
+#endif
 
 
 // Intercept memory binding to correlate buffer object handles with device memory allocations.
@@ -528,6 +614,95 @@ VKAPI_ATTR VkResult VKAPI_CALL vkDebugMarkerSetObjectNameEXT(VkDevice device, co
                                                      pNameInfo->pObjectName);
     }
     return result;
+}
+
+// Companion passthroughs for VK_EXT_debug_utils and VK_EXT_debug_marker so the layer can
+// advertise and support both extensions standalone without VK_LAYER_GOOGLE_DebugMarker.
+VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectTagEXT(VkDevice device, const VkDebugUtilsObjectTagInfoEXT* pTagInfo) {
+    auto* table = device_dispatch_table(device);
+    return (table->SetDebugUtilsObjectTagEXT != nullptr) ? table->SetDebugUtilsObjectTagEXT(device, pTagInfo) : VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginDebugUtilsLabelEXT(VkCommandBuffer commandBuffer, const VkDebugUtilsLabelEXT* pLabelInfo) {
+    if (device_dispatch_table(commandBuffer)->CmdBeginDebugUtilsLabelEXT) {
+        device_dispatch_table(commandBuffer)->CmdBeginDebugUtilsLabelEXT(commandBuffer, pLabelInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndDebugUtilsLabelEXT(VkCommandBuffer commandBuffer) {
+    if (device_dispatch_table(commandBuffer)->CmdEndDebugUtilsLabelEXT) {
+        device_dispatch_table(commandBuffer)->CmdEndDebugUtilsLabelEXT(commandBuffer);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdInsertDebugUtilsLabelEXT(VkCommandBuffer commandBuffer, const VkDebugUtilsLabelEXT* pLabelInfo) {
+    if (device_dispatch_table(commandBuffer)->CmdInsertDebugUtilsLabelEXT) {
+        device_dispatch_table(commandBuffer)->CmdInsertDebugUtilsLabelEXT(commandBuffer, pLabelInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkQueueBeginDebugUtilsLabelEXT(VkQueue queue, const VkDebugUtilsLabelEXT* pLabelInfo) {
+    if (device_dispatch_table(queue)->QueueBeginDebugUtilsLabelEXT) {
+        device_dispatch_table(queue)->QueueBeginDebugUtilsLabelEXT(queue, pLabelInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkQueueEndDebugUtilsLabelEXT(VkQueue queue) {
+    if (device_dispatch_table(queue)->QueueEndDebugUtilsLabelEXT) {
+        device_dispatch_table(queue)->QueueEndDebugUtilsLabelEXT(queue);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkQueueInsertDebugUtilsLabelEXT(VkQueue queue, const VkDebugUtilsLabelEXT* pLabelInfo) {
+    if (device_dispatch_table(queue)->QueueInsertDebugUtilsLabelEXT) {
+        device_dispatch_table(queue)->QueueInsertDebugUtilsLabelEXT(queue, pLabelInfo);
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
+                                                              const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pMessenger) {
+    if (instance_dispatch_table(instance)->CreateDebugUtilsMessengerEXT) {
+        return instance_dispatch_table(instance)->CreateDebugUtilsMessengerEXT(instance, pCreateInfo, pAllocator, pMessenger);
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT messenger,
+                                                           const VkAllocationCallbacks* pAllocator) {
+    if (instance_dispatch_table(instance)->DestroyDebugUtilsMessengerEXT) {
+        instance_dispatch_table(instance)->DestroyDebugUtilsMessengerEXT(instance, messenger, pAllocator);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkSubmitDebugUtilsMessageEXT(VkInstance instance, VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                        VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+                                                        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData) {
+    if (instance_dispatch_table(instance)->SubmitDebugUtilsMessageEXT) {
+        instance_dispatch_table(instance)->SubmitDebugUtilsMessageEXT(instance, messageSeverity, messageTypes, pCallbackData);
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkDebugMarkerSetObjectTagEXT(VkDevice device, const VkDebugMarkerObjectTagInfoEXT* pTagInfo) {
+    auto* table = device_dispatch_table(device);
+    return (table->DebugMarkerSetObjectTagEXT != nullptr) ? table->DebugMarkerSetObjectTagEXT(device, pTagInfo) : VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDebugMarkerBeginEXT(VkCommandBuffer commandBuffer, const VkDebugMarkerMarkerInfoEXT* pMarkerInfo) {
+    if (device_dispatch_table(commandBuffer)->CmdDebugMarkerBeginEXT) {
+        device_dispatch_table(commandBuffer)->CmdDebugMarkerBeginEXT(commandBuffer, pMarkerInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDebugMarkerEndEXT(VkCommandBuffer commandBuffer) {
+    if (device_dispatch_table(commandBuffer)->CmdDebugMarkerEndEXT) {
+        device_dispatch_table(commandBuffer)->CmdDebugMarkerEndEXT(commandBuffer);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDebugMarkerInsertEXT(VkCommandBuffer commandBuffer, const VkDebugMarkerMarkerInfoEXT* pMarkerInfo) {
+    if (device_dispatch_table(commandBuffer)->CmdDebugMarkerInsertEXT) {
+        device_dispatch_table(commandBuffer)->CmdDebugMarkerInsertEXT(commandBuffer, pMarkerInfo);
+    }
 }
 
 } // extern "C"
