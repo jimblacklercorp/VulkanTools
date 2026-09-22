@@ -44,7 +44,7 @@ function(LayerTest NAME)
     target_compile_definitions(${TEST_NAME} PUBLIC LAYER_BINARY_PATH="$<TARGET_FILE_DIR:VkLayer_${NAME}>")
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 
-    set_target_properties(${TEST_NAME} PROPERTIES FOLDER "layers/${NAME}/Test" ENABLE_EXPORTS TRUE)
+    set_target_properties(${TEST_NAME} PROPERTIES FOLDER "layers/${NAME}/Test")
 
     if(WIN32 AND (QT_TARGET_TYPE STREQUAL STATIC_LIBRARY))
       set_property(TARGET ${TEST_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

@@ -75,9 +75,6 @@ class DeviceMemoryReport {
      * @brief Returns the singleton instance of the DeviceMemoryReport class.
      * @return Reference to the DeviceMemoryReport singleton.
      */
-#if defined(__GNUC__) && __GNUC__ >= 4
-    __attribute__((visibility("default")))
-#endif
     static DeviceMemoryReport& Get();
 
     /**

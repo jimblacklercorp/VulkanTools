@@ -68,6 +68,15 @@ uint64_t AsObjectHandle(HandleType handle) {
 
 uintptr_t g_next_handle = 0x10000;
 
+VKAPI_ATTR VkResult VKAPI_CALL StubCreateBuffer(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer* pBuffer) {
+    if (pBuffer != nullptr) {
+        *pBuffer = MakeHandle<VkBuffer>(++g_next_handle);
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL StubDestroyBuffer(VkDevice, VkBuffer, const VkAllocationCallbacks*) {}
+
 VKAPI_ATTR VkResult VKAPI_CALL StubCreateImage(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* pImage) {
     if (pImage != nullptr) {
         *pImage = MakeHandle<VkImage>(++g_next_handle);
@@ -122,6 +131,8 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const c
     if (pName == nullptr) return nullptr;
     const std::string name(pName);
 
+    if (name == "vkCreateBuffer") return reinterpret_cast<PFN_vkVoidFunction>(StubCreateBuffer);
+    if (name == "vkDestroyBuffer") return reinterpret_cast<PFN_vkVoidFunction>(StubDestroyBuffer);
     if (name == "vkCreateImage") return reinterpret_cast<PFN_vkVoidFunction>(StubCreateImage);
     if (name == "vkDestroyImage") return reinterpret_cast<PFN_vkVoidFunction>(StubDestroyImage);
     if (name == "vkAllocateMemory") return reinterpret_cast<PFN_vkVoidFunction>(StubAllocateMemory);
@@ -186,6 +197,44 @@ class DeviceMemoryReportDispatchTests : public ::testing::Test {
         DeviceMemoryReport::Get().Reset();
     }
 };
+
+TEST_F(DeviceMemoryReportDispatchTests, ProactiveMemoryRequirementsQuery) {
+    FakeDevice device;
+    g_image_requirements_size = 16384;
+    g_buffer_requirements_size = 2048;
+
+    VkImageCreateInfo img_info = {};
+    img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img_info.imageType = VK_IMAGE_TYPE_2D;
+    img_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    img_info.extent = {64, 64, 1};
+    img_info.mipLevels = 1;
+    img_info.arrayLayers = 1;
+    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImage image = VK_NULL_HANDLE;
+    ASSERT_EQ(vkCreateImage(device.handle(), &img_info, nullptr, &image), VK_SUCCESS);
+    EXPECT_EQ(g_image_requirements_queries, 1);
+    EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 16384u);
+
+    VkBufferCreateInfo buf_info = {};
+    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_info.size = 1024;
+    buf_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer buffer = VK_NULL_HANDLE;
+    ASSERT_EQ(vkCreateBuffer(device.handle(), &buf_info, nullptr, &buffer), VK_SUCCESS);
+    EXPECT_EQ(g_buffer_requirements_queries, 1);
+    EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(buffer)), 2048u);
+
+    vkDestroyImage(device.handle(), image, nullptr);
+    vkDestroyBuffer(device.handle(), buffer, nullptr);
+}
 
 TEST_F(DeviceMemoryReportDispatchTests, BindBufferMemoryQueriesUnknownResourceSize) {
     // A buffer whose size was never recorded (for example when the application created it before
