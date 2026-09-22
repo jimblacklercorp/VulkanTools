@@ -664,9 +664,11 @@ VKAPI_ATTR void VKAPI_CALL vkQueueInsertDebugUtilsLabelEXT(VkQueue queue, const 
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
                                                               const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pMessenger) {
-    if (instance_dispatch_table(instance)->CreateDebugUtilsMessengerEXT) {
+    assert(pMessenger != nullptr);
+    if (instance_dispatch_table(instance)->CreateDebugUtilsMessengerEXT != nullptr) {
         return instance_dispatch_table(instance)->CreateDebugUtilsMessengerEXT(instance, pCreateInfo, pAllocator, pMessenger);
     }
+    *pMessenger = VK_NULL_HANDLE;
     return VK_SUCCESS;
 }
 

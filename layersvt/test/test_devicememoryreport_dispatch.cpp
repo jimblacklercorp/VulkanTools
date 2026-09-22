@@ -436,5 +436,19 @@ TEST_F(DeviceMemoryReportDispatchTests, EnumerateDeviceExtensionPropertiesDedupl
     EXPECT_EQ(full_count, 3u);
 }
 
+TEST_F(DeviceMemoryReportDispatchTests, CreateDebugUtilsMessengerStubInitializesHandle) {
+    FakeInstance instance;
+    auto pfn_create_messenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance.handle(), "vkCreateDebugUtilsMessengerEXT"));
+    ASSERT_NE(pfn_create_messenger, nullptr);
+
+    VkDebugUtilsMessengerCreateInfoEXT create_info = {};
+    create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    VkDebugUtilsMessengerEXT messenger = MakeHandle<VkDebugUtilsMessengerEXT>(0xDEADBEEF);
+
+    EXPECT_EQ(pfn_create_messenger(instance.handle(), &create_info, nullptr, &messenger), VK_SUCCESS);
+    EXPECT_EQ(messenger, static_cast<VkDebugUtilsMessengerEXT>(VK_NULL_HANDLE));
+}
+
 }  // namespace
 
