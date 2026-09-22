@@ -369,9 +369,6 @@ void DeviceMemoryReport::RemoveAllocationTracking(uint64_t memory_handle) {
     if (allocation_it == memory_allocations_.end()) return;
 
     auto& allocation = allocation_it->second;
-    if (!allocation.is_driver && allocation.object_type == VK_OBJECT_TYPE_DEVICE_MEMORY) {
-        debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, memory_handle));
-    }
     for (const auto& suballocation : allocation.sub_allocations) {
         SubtractCounterBytes(suballocation.usage_track, suballocation.size);
         auto resource_iterator = resources_.find(suballocation.resource_handle);
