@@ -503,10 +503,10 @@ VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2KHR(VkDevice device, co
 
 // Object naming from VK_EXT_debug_utils.
 VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsObjectNameInfoEXT* pNameInfo) {
-    if (pNameInfo == nullptr) return VK_SUCCESS;
+    assert(pNameInfo != nullptr);
     auto* table = device_dispatch_table(device);
     // Naming is informational, so a driver that does not implement it is not an error.
-    VkResult result = (table != nullptr && table->SetDebugUtilsObjectNameEXT != nullptr)
+    VkResult result = (table->SetDebugUtilsObjectNameEXT != nullptr)
                           ? table->SetDebugUtilsObjectNameEXT(device, pNameInfo)
                           : VK_SUCCESS;
     if (result == VK_SUCCESS) {
@@ -518,9 +518,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, con
 
 // Object naming from VK_EXT_debug_marker, the predecessor of VK_EXT_debug_utils.
 VKAPI_ATTR VkResult VKAPI_CALL vkDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebugMarkerObjectNameInfoEXT* pNameInfo) {
-    if (pNameInfo == nullptr) return VK_SUCCESS;
+    assert(pNameInfo != nullptr);
     auto* table = device_dispatch_table(device);
-    VkResult result = (table != nullptr && table->DebugMarkerSetObjectNameEXT != nullptr)
+    VkResult result = (table->DebugMarkerSetObjectNameEXT != nullptr)
                           ? table->DebugMarkerSetObjectNameEXT(device, pNameInfo)
                           : VK_SUCCESS;
     if (result == VK_SUCCESS) {
