@@ -112,6 +112,17 @@ class DebugMarker {
             : vk_device(dev), object_type(type), handle(h), name(n) {}
     };
 
+    /**
+     * @brief Writes one object name to every enabled tracing session.
+     *
+     * Both the live naming path and the session-start replay go through here so the two cannot
+     * drift apart in what they publish.
+     *
+     * @note The caller must hold mutex_.
+     * @param marker The object name to publish.
+     */
+    void Emit(const DebugObjectName& marker);
+
     std::mutex mutex_;
     /**
      * @brief Maps a physical device handle to its corresponding Vulkan instance handle.
