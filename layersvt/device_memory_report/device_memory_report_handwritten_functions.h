@@ -279,10 +279,10 @@ EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceLayerProperties(
     return util_GetLayerProperties(ARRAY_SIZE(layerProperties), layerProperties, pPropertyCount, pProperties);
 }
 
-static VKAPI_ATTR VkResult VKAPI_CALL devmemreport_EnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
-                                                                                      const char* pLayerName,
-                                                                                      uint32_t* pPropertyCount,
-                                                                                      VkExtensionProperties* pProperties) {
+EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                                                                    const char* pLayerName,
+                                                                                    uint32_t* pPropertyCount,
+                                                                                    VkExtensionProperties* pProperties) {
     assert(pPropertyCount != nullptr);
 
     static const VkExtensionProperties layer_device_extensions[] = {
@@ -336,13 +336,6 @@ static VKAPI_ATTR VkResult VKAPI_CALL devmemreport_EnumerateDeviceExtensionPrope
 
     return util_GetExtensionProperties(static_cast<uint32_t>(merged_extensions.size()),
                                        merged_extensions.data(), pPropertyCount, pProperties);
-}
-
-EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
-                                                                                    const char* pLayerName,
-                                                                                    uint32_t* pPropertyCount,
-                                                                                    VkExtensionProperties* pProperties) {
-    return devmemreport_EnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);
 }
 
 
