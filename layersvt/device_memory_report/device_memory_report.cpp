@@ -450,7 +450,9 @@ void DeviceMemoryReport::OnDestroyObject(uint64_t object_handle, VkObjectType ob
     std::lock_guard<std::mutex> lock(counter_mutex_);
     RemoveResourceBinding(object_handle);
     resources_.erase(object_handle);
-    debug_object_names_.erase(std::make_pair(object_type, object_handle));
+    if (debug_object_names_.erase(std::make_pair(object_type, object_handle)) > 0) {
+        EmitDebugObjectName(object_type, object_handle, "");
+    }
 }
 
 void DeviceMemoryReport::SetDebugObjectName(VkObjectType object_type, uint64_t object_handle, const char* name) {
@@ -659,7 +661,9 @@ void DeviceMemoryReport::OnAllocateMemory(VkDevice device, VkDeviceMemory memory
 void DeviceMemoryReport::OnFreeMemory(VkDevice device, VkDeviceMemory memory) {
     std::lock_guard<std::mutex> lock(counter_mutex_);
     uint64_t handle = reinterpret_cast<uint64_t>(memory);
-    debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, handle));
+    if (debug_object_names_.erase(std::make_pair(VK_OBJECT_TYPE_DEVICE_MEMORY, handle)) > 0) {
+        EmitDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, handle, "");
+    }
     if (has_callback_map_[device]) return;
     auto allocation_iterator = memory_allocations_.find(handle);
     if (allocation_iterator == memory_allocations_.end()) return;
