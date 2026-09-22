@@ -31,17 +31,22 @@
 // - vkCreateInstance: Initializes Perfetto tracing and the instance dispatch table.
 // - vkEnumeratePhysicalDevices / vkEnumeratePhysicalDeviceGroups: Tracks the mapping
 //   between physical devices and instances to support dispatch table lookups.
-// - vkCreateDevice / vkDestroyDevice: Initializes/destroys device dispatch tables and
-//   injects VK_EXT_device_memory_report callback registration into device creation.
+// - vkCreateDevice / vkDestroyDevice: Initializes/destroys device dispatch tables, strips
+//   layer-advertised device extensions (VK_EXT_device_memory_report, VK_EXT_debug_marker) when
+//   unsupported by the underlying driver, and injects VK_EXT_device_memory_report callback
+//   registration into device creation.
 //
-// Memory tracking & resource tracking intercepts:
+// Memory tracking, resource tracking & debug naming intercepts:
 // - vkAllocateMemory / vkFreeMemory: Tracks direct allocations/frees as fallbacks.
 // - vkBindBufferMemory* / vkBindImageMemory*: Associates buffer/image handles with memory allocations.
 // - vkCreateBuffer / vkDestroyBuffer: Tracks buffer creation, usage flags, and requested sizes.
 // - vkCreateImage / vkDestroyImage: Tracks image creation and usage flags.
 // - vkGetBufferMemoryRequirements* / vkGetImageMemoryRequirements*: Tracks resource memory requirements.
-// - vkEnumerate*ExtensionProperties / vkEnumerate*LayerProperties: Advertises the layer
-//   and support for the VK_EXT_device_memory_report extension.
+// - vkSetDebugUtilsObjectNameEXT / vkDebugMarkerSetObjectNameEXT (and companion passthroughs):
+//   Records debug object names for buffers, images, and device memory so the layer can operate
+//   standalone without VK_LAYER_GOOGLE_DebugMarker.
+// - vkEnumerate*ExtensionProperties / vkEnumerate*LayerProperties: Advertises the layer and
+//   support for VK_EXT_device_memory_report, VK_EXT_debug_utils, and VK_EXT_debug_marker.
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 

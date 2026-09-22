@@ -54,7 +54,11 @@ const char* GetImageCluster(VkImageUsageFlags usage, VkMemoryPropertyFlags memFl
  * The layer intercepts Vulkan memory allocation and object creation events, using either
  * VK_EXT_device_memory_report callbacks (when supported by the underlying driver) or falling back
  * to direct allocation intercepts (vkAllocateMemory/vkFreeMemory).
- * Object bindings (vkBindBufferMemory, vkBindImageMemory, vkBindBufferMemory2, vkBindImageMemory2) are tracked to attribute memory allocations to usage categories.
+ * Object bindings (vkBindBufferMemory, vkBindImageMemory, vkBindBufferMemory2, vkBindImageMemory2)
+ * are tracked to attribute memory allocations to usage categories. The layer also advertises and
+ * intercepts VK_EXT_debug_utils and VK_EXT_debug_marker (stripping VK_EXT_debug_marker at device
+ * creation when unsupported downstream) so debug object names for buffers, images, and device
+ * memory are published standalone without requiring VK_LAYER_GOOGLE_DebugMarker.
  *
  * Track Categories:
  * Memory usage counters are reported to Perfetto under:
