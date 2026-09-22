@@ -31,9 +31,7 @@ static PFN_vkVoidFunction devmemreport_known_instance_functions(const char* pNam
     if (strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyInstance);
     if (strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumeratePhysicalDevices);
     if (strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumeratePhysicalDeviceGroups);
-#ifdef __ANDROID__
-    if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceExtensionProperties);
-#endif
+    if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(devmemreport_EnumerateDeviceExtensionProperties);
     if (strcmp(pName, "vkCreateDebugUtilsMessengerEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCreateDebugUtilsMessengerEXT);
     if (strcmp(pName, "vkDestroyDebugUtilsMessengerEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyDebugUtilsMessengerEXT);
     if (strcmp(pName, "vkSubmitDebugUtilsMessageEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSubmitDebugUtilsMessageEXT);
@@ -111,12 +109,12 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
     }
 
     if (instance == nullptr) {
+        if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) {
+            return reinterpret_cast<PFN_vkVoidFunction>(devmemreport_EnumerateDeviceExtensionProperties);
+        }
 #ifdef __ANDROID__
         if (strcmp(pName, "vkEnumerateDeviceLayerProperties") == 0) {
             return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceLayerProperties);
-        }
-        if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) {
-            return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceExtensionProperties);
         }
 #endif
         return nullptr;

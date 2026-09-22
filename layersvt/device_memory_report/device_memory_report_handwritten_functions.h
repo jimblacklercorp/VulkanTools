@@ -279,72 +279,70 @@ EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceLayerProperties(
     return util_GetLayerProperties(ARRAY_SIZE(layerProperties), layerProperties, pPropertyCount, pProperties);
 }
 
-#ifdef __ANDROID__
-EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
-                                                                                    const char* pLayerName,
-                                                                                    uint32_t* pPropertyCount,
-                                                                                    VkExtensionProperties* pProperties) {
-    static const VkExtensionProperties deviceExtensions[] = {
+static VKAPI_ATTR VkResult VKAPI_CALL devmemreport_EnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                                                                      const char* pLayerName,
+                                                                                      uint32_t* pPropertyCount,
+                                                                                      VkExtensionProperties* pProperties) {
+    assert(pPropertyCount != nullptr);
+
+    static const VkExtensionProperties layer_device_extensions[] = {
         {VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, VK_EXT_DEVICE_MEMORY_REPORT_SPEC_VERSION},
         {VK_EXT_DEBUG_MARKER_EXTENSION_NAME, VK_EXT_DEBUG_MARKER_SPEC_VERSION},
     };
 
+    if (pLayerName != nullptr && strcmp(pLayerName, LAYER_NAME) == 0) {
+        return util_GetExtensionProperties(ARRAY_SIZE(layer_device_extensions), layer_device_extensions,
+                                           pPropertyCount, pProperties);
+    }
+
+    assert(physicalDevice != VK_NULL_HANDLE);
+
+    // Forward queries for other explicit layers downstream unchanged.
     if (pLayerName != nullptr) {
-        if (strcmp(pLayerName, LAYER_NAME) == 0) {
-            return util_GetExtensionProperties(ARRAY_SIZE(deviceExtensions), deviceExtensions, pPropertyCount, pProperties);
-        }
-        if (physicalDevice != VK_NULL_HANDLE && instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties) {
-            return instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);
-        }
-        return util_GetExtensionProperties(0, nullptr, pPropertyCount, pProperties);
+        return instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+            physicalDevice, pLayerName, pPropertyCount, pProperties);
     }
 
-    if (physicalDevice == VK_NULL_HANDLE || instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties == nullptr) {
-        return util_GetExtensionProperties(ARRAY_SIZE(deviceExtensions), deviceExtensions, pPropertyCount, pProperties);
-    }
-
-    // Manually append device extensions when pLayerName == nullptr because the Android Vulkan
+    // Manually merge device extensions when pLayerName == nullptr because the Android Vulkan
     // loader does not expose device extensions from implicit layers (b/143293104).
-    if (pProperties == nullptr) {
-        VkResult res = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, pPropertyCount, nullptr);
-        if (res == VK_SUCCESS && pPropertyCount != nullptr) {
-            (*pPropertyCount) += ARRAY_SIZE(deviceExtensions);
-        }
-        return res;
+    uint32_t downstream_count = 0;
+    VkResult result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+        physicalDevice, nullptr, &downstream_count, nullptr);
+    if (result != VK_SUCCESS) {
+        return result;
     }
 
-    if (pPropertyCount != nullptr && *pPropertyCount > 0) {
-        uint32_t requestedCount = *pPropertyCount;
-        VkResult res = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, pPropertyCount, pProperties);
-        if (res == VK_SUCCESS || res == VK_INCOMPLETE) {
-            uint32_t originalCount = *pPropertyCount;
-            uint32_t additionalCount = 0;
-            for (uint32_t i = 0; i < ARRAY_SIZE(deviceExtensions); ++i) {
-                bool found = false;
-                for (uint32_t j = 0; j < originalCount; ++j) {
-                    if (strcmp(pProperties[j].extensionName, deviceExtensions[i].extensionName) == 0) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    if (originalCount + additionalCount < requestedCount) {
-                        pProperties[originalCount + additionalCount] = deviceExtensions[i];
-                    } else {
-                        res = VK_INCOMPLETE;
-                    }
-                    additionalCount++;
-                }
-            }
-            *pPropertyCount = (originalCount + additionalCount > requestedCount)
-                                  ? requestedCount
-                                  : (originalCount + additionalCount);
-        }
-        return res;
+    std::vector<VkExtensionProperties> downstream_extensions(downstream_count);
+    result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+        physicalDevice, nullptr, &downstream_count, downstream_extensions.data());
+    if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+        return result;
     }
-    return VK_SUCCESS;
+
+    std::vector<VkExtensionProperties> merged_extensions = std::move(downstream_extensions);
+    for (const auto& layer_extension : layer_device_extensions) {
+        bool duplicate = false;
+        for (const auto& existing : merged_extensions) {
+            if (strcmp(layer_extension.extensionName, existing.extensionName) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            merged_extensions.push_back(layer_extension);
+        }
+    }
+
+    return util_GetExtensionProperties(static_cast<uint32_t>(merged_extensions.size()),
+                                       merged_extensions.data(), pPropertyCount, pProperties);
 }
-#endif
+
+EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                                                                    const char* pLayerName,
+                                                                                    uint32_t* pPropertyCount,
+                                                                                    VkExtensionProperties* pProperties) {
+    return devmemreport_EnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);
+}
 
 
 // Intercept memory binding to correlate buffer object handles with device memory allocations.

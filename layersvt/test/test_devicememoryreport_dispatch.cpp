@@ -378,5 +378,63 @@ TEST_F(DeviceMemoryReportDispatchTests, DebugMarkerSetObjectNameStandaloneAndCha
               "chained_image");
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL StubEnumerateDeviceExtensionPropertiesWithOverlap(
+    VkPhysicalDevice, const char*, uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
+    static const VkExtensionProperties driver_exts[] = {
+        {VK_KHR_SWAPCHAIN_EXTENSION_NAME, 70},
+        {VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, VK_EXT_DEVICE_MEMORY_REPORT_SPEC_VERSION},
+    };
+    return util_GetExtensionProperties(2, driver_exts, pPropertyCount, pProperties);
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetInstanceProcAddr(VkInstance, const char* pName) {
+    if (pName == nullptr) return nullptr;
+    if (std::string(pName) == "vkEnumerateDeviceExtensionProperties") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubEnumerateDeviceExtensionPropertiesWithOverlap);
+    }
+    return nullptr;
+}
+
+class FakeInstance {
+   public:
+    FakeInstance() {
+        dispatch_key_ = this;
+        initInstanceTable(handle(), StubGetInstanceProcAddr);
+    }
+    ~FakeInstance() { destroy_instance_dispatch_table(get_dispatch_key(handle())); }
+
+    VkInstance handle() { return reinterpret_cast<VkInstance>(this); }
+    VkPhysicalDevice physical_device() { return reinterpret_cast<VkPhysicalDevice>(this); }
+
+   private:
+    void* dispatch_key_ = nullptr;
+};
+
+TEST_F(DeviceMemoryReportDispatchTests, EnumerateDeviceExtensionPropertiesDeduplicatesAndHandlesIncomplete) {
+    FakeInstance instance;
+    VkPhysicalDevice phys_dev = instance.physical_device();
+
+    // Downstream exposes VK_KHR_swapchain + VK_EXT_device_memory_report (2 extensions).
+    // The layer merges VK_EXT_device_memory_report (duplicate) + VK_EXT_debug_marker (new),
+    // so both the count query and the fill query must report 3 extensions.
+    uint32_t count = 0;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &count, nullptr), VK_SUCCESS);
+    EXPECT_EQ(count, 3u);
+
+    // Passing non-null pProperties with count == 0 or count < 3 must return VK_INCOMPLETE.
+    std::vector<VkExtensionProperties> props(3);
+    uint32_t zero_count = 0;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &zero_count, props.data()), VK_INCOMPLETE);
+    EXPECT_EQ(zero_count, 0u);
+
+    uint32_t partial_count = 2;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &partial_count, props.data()), VK_INCOMPLETE);
+    EXPECT_EQ(partial_count, 2u);
+
+    uint32_t full_count = 3;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &full_count, props.data()), VK_SUCCESS);
+    EXPECT_EQ(full_count, 3u);
+}
+
 }  // namespace
 
