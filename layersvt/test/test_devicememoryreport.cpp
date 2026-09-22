@@ -16,6 +16,7 @@
 #include "layer_test_helper.h"
 #include "device_memory_report.h"
 #include "device_memory_report_perfetto.h"
+#include "test_devicememoryreport_peer.h"
 
 #include <vulkan/vulkan_core.h>
 
@@ -591,36 +592,6 @@ TEST_F(DeviceMemoryReportTests, DriverVsAppUnboundMemoryAttribution) {
     EXPECT_EQ(DeviceMemoryReport::Get().GetUsageCounterBytes("vulkan.mem.driver.usage.geometry_mesh"), 0u);
     DeviceMemoryReport::Get().OnDestroyObject(buffer_handle, VK_OBJECT_TYPE_BUFFER);
 }
-
-class DeviceMemoryReportTestPeer {
-public:
-    static std::optional<DeviceMemoryReport::MemoryAllocation> FindAllocation(uint64_t memory_handle) {
-        auto& report = DeviceMemoryReport::Get();
-        std::lock_guard<std::mutex> lock(report.counter_mutex_);
-        auto it = report.memory_allocations_.find(memory_handle);
-        if (it == report.memory_allocations_.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
-
-    static std::optional<DeviceMemoryReport::Resource> FindResource(uint64_t resource_handle) {
-        auto& report = DeviceMemoryReport::Get();
-        std::lock_guard<std::mutex> lock(report.counter_mutex_);
-        auto it = report.resources_.find(resource_handle);
-        if (it == report.resources_.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
-
-    static std::string GetDebugObjectName(VkObjectType object_type, uint64_t object_handle) {
-        auto& report = DeviceMemoryReport::Get();
-        std::lock_guard<std::mutex> lock(report.counter_mutex_);
-        auto it = report.debug_object_names_.find(std::make_pair(object_type, object_handle));
-        return it != report.debug_object_names_.end() ? it->second : std::string();
-    }
-};
 
 TEST_F(DeviceMemoryReportTests, MemoryReportSnapshotDump) {
     TEST_DESCRIPTION("Test DumpCurrentCountersAndAllocations state dump and instant event emissions when a trace session begins");

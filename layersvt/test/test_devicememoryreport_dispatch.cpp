@@ -21,6 +21,7 @@
 // Vulkan implementation.
 
 #include "device_memory_report.h"
+#include "test_devicememoryreport_peer.h"
 #include "vk_layer_table.h"
 
 #include <vulkan/vulkan.h>
@@ -29,16 +30,6 @@
 
 #include <cstdint>
 #include <string>
-
-class DeviceMemoryReportTestPeer {
-   public:
-    static std::string GetDebugObjectName(VkObjectType object_type, uint64_t object_handle) {
-        auto& report = DeviceMemoryReport::Get();
-        std::lock_guard<std::mutex> lock(report.counter_mutex_);
-        auto it = report.debug_object_names_.find(std::make_pair(object_type, object_handle));
-        return it != report.debug_object_names_.end() ? it->second : std::string();
-    }
-};
 
 namespace {
 
