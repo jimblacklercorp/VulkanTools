@@ -16,6 +16,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <mutex>
 #include <vector>
 #include <assert.h>
@@ -308,17 +309,21 @@ EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionPropert
     uint32_t downstream_count = 0;
     VkResult result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
         physicalDevice, nullptr, &downstream_count, nullptr);
-    if (result != VK_SUCCESS) {
-        return result;
-    }
-
-    std::vector<VkExtensionProperties> downstream_extensions(downstream_count);
-    result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
-        physicalDevice, nullptr, &downstream_count, downstream_extensions.data());
     if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
         return result;
     }
-    downstream_extensions.resize(downstream_count);
+
+    constexpr uint32_t max_extensions = 4096;
+    downstream_count = std::min(downstream_count, max_extensions);
+    std::vector<VkExtensionProperties> downstream_extensions(downstream_count);
+    if (downstream_count > 0) {
+        result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+            physicalDevice, nullptr, &downstream_count, downstream_extensions.data());
+        if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+            return result;
+        }
+        downstream_extensions.resize(std::min(downstream_count, static_cast<uint32_t>(downstream_extensions.size())));
+    }
 
     std::vector<VkExtensionProperties> merged_extensions = std::move(downstream_extensions);
     for (const auto& layer_extension : layer_device_extensions) {
