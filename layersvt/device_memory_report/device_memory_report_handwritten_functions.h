@@ -143,16 +143,26 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
     // Check if the underlying driver supports VK_EXT_device_memory_report or VK_EXT_debug_marker.
     bool supports_memory_report = false;
     bool supports_debug_marker = false;
-    uint32_t ext_count = 0;
     if (instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties) {
-        if (instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &ext_count, nullptr) == VK_SUCCESS && ext_count > 0) {
-            std::vector<VkExtensionProperties> exts(ext_count);
-            if (instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &ext_count, exts.data()) == VK_SUCCESS) {
-                for (const auto& ext : exts) {
-                    if (strcmp(ext.extensionName, VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME) == 0) {
+        uint32_t extension_count = 0;
+        VkResult enumerate_result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+            physicalDevice, nullptr, &extension_count, nullptr);
+        if ((enumerate_result == VK_SUCCESS || enumerate_result == VK_INCOMPLETE) && extension_count > 0) {
+            constexpr uint32_t max_extensions = 4096;
+            extension_count = std::min(extension_count, max_extensions);
+            std::vector<VkExtensionProperties> extensions(extension_count);
+            enumerate_result = instance_dispatch_table(physicalDevice)->EnumerateDeviceExtensionProperties(
+                physicalDevice, nullptr, &extension_count, extensions.data());
+            if (enumerate_result == VK_SUCCESS || enumerate_result == VK_INCOMPLETE) {
+                extensions.resize(std::min(extension_count, static_cast<uint32_t>(extensions.size())));
+                for (const auto& extension : extensions) {
+                    if (strcmp(extension.extensionName, VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME) == 0) {
                         supports_memory_report = true;
-                    } else if (strcmp(ext.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0) {
+                    } else if (strcmp(extension.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0) {
                         supports_debug_marker = true;
+                    }
+                    if (supports_memory_report && supports_debug_marker) {
+                        break;
                     }
                 }
             }
@@ -174,7 +184,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
         enabled_extensions.push_back(name);
     }
 
-    VkDeviceDeviceMemoryReportCreateInfoEXT memory_report_ci = {};
+    VkDeviceDeviceMemoryReportCreateInfoEXT memory_report_create_info = {};
     if (supports_memory_report) {
         bool already_enabled = false;
         for (const char* name : enabled_extensions) {
@@ -187,11 +197,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
             enabled_extensions.push_back(VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME);
         }
 
-        memory_report_ci.sType = VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT;
-        memory_report_ci.pfnUserCallback = DeviceMemoryReport::MemoryReportCallback;
-        memory_report_ci.pUserData = nullptr;
-        memory_report_ci.pNext = modified_create_info.pNext;
-        modified_create_info.pNext = &memory_report_ci;
+        memory_report_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT;
+        memory_report_create_info.pfnUserCallback = DeviceMemoryReport::MemoryReportCallback;
+        memory_report_create_info.pUserData = nullptr;
+        memory_report_create_info.pNext = modified_create_info.pNext;
+        modified_create_info.pNext = &memory_report_create_info;
     }
 
     modified_create_info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
