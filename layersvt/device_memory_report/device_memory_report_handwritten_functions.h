@@ -244,15 +244,20 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice device, VkDeviceMemory memory, 
 EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(const char* pLayerName,
                                                                                        uint32_t* pPropertyCount,
                                                                                        VkExtensionProperties* pProperties) {
+    // Khronos loader-layer interface policy LLP_LAYER_15: a layer's exported
+    // vkEnumerateInstanceExtensionProperties is only valid for queries naming that layer, and must
+    // report VK_ERROR_LAYER_NOT_PRESENT for anything else.
+    if (pLayerName == nullptr || strcmp(pLayerName, LAYER_NAME) != 0) {
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    }
+
+    assert(pPropertyCount != nullptr);
+
     static const VkExtensionProperties instanceExtensions[] = {
         {VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION},
     };
 
-    if (pLayerName != nullptr && strcmp(pLayerName, LAYER_NAME) == 0) {
-        return util_GetExtensionProperties(ARRAY_SIZE(instanceExtensions), instanceExtensions, pPropertyCount, pProperties);
-    }
-
-    return util_GetExtensionProperties(0, nullptr, pPropertyCount, pProperties);
+    return util_GetExtensionProperties(ARRAY_SIZE(instanceExtensions), instanceExtensions, pPropertyCount, pProperties);
 }
 
 EXPORT_FUNCTION VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(uint32_t* pPropertyCount,
