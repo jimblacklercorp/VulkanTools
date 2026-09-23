@@ -194,32 +194,32 @@ TEST_F(DeviceMemoryReportDispatchTests, ProactiveMemoryRequirementsQuery) {
     g_image_requirements_size = 16384;
     g_buffer_requirements_size = 2048;
 
-    VkImageCreateInfo img_info = {};
-    img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    img_info.imageType = VK_IMAGE_TYPE_2D;
-    img_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-    img_info.extent = {64, 64, 1};
-    img_info.mipLevels = 1;
-    img_info.arrayLayers = 1;
-    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    img_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageCreateInfo image_info = {};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_info.extent = {64, 64, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkImage image = VK_NULL_HANDLE;
-    ASSERT_EQ(vkCreateImage(device.handle(), &img_info, nullptr, &image), VK_SUCCESS);
+    ASSERT_EQ(vkCreateImage(device.handle(), &image_info, nullptr, &image), VK_SUCCESS);
     EXPECT_EQ(g_image_requirements_queries, 1);
     EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 16384u);
 
-    VkBufferCreateInfo buf_info = {};
-    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.size = 1024;
-    buf_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo buffer_info = {};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = 1024;
+    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VkBuffer buffer = VK_NULL_HANDLE;
-    ASSERT_EQ(vkCreateBuffer(device.handle(), &buf_info, nullptr, &buffer), VK_SUCCESS);
+    ASSERT_EQ(vkCreateBuffer(device.handle(), &buffer_info, nullptr, &buffer), VK_SUCCESS);
     EXPECT_EQ(g_buffer_requirements_queries, 1);
     EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(buffer)), 2048u);
 
@@ -420,11 +420,11 @@ TEST_F(DeviceMemoryReportDispatchTests, DebugMarkerSetObjectNameStandaloneAndCha
 
 VKAPI_ATTR VkResult VKAPI_CALL StubEnumerateDeviceExtensionPropertiesWithOverlap(
     VkPhysicalDevice, const char*, uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
-    static const VkExtensionProperties driver_exts[] = {
+    static const VkExtensionProperties driver_extensions[] = {
         {VK_KHR_SWAPCHAIN_EXTENSION_NAME, 70},
         {VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, VK_EXT_DEVICE_MEMORY_REPORT_SPEC_VERSION},
     };
-    return util_GetExtensionProperties(2, driver_exts, pPropertyCount, pProperties);
+    return util_GetExtensionProperties(2, driver_extensions, pPropertyCount, pProperties);
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetInstanceProcAddr(VkInstance, const char* pName) {
@@ -441,7 +441,11 @@ class FakeInstance {
         dispatch_key_ = this;
         initInstanceTable(handle(), StubGetInstanceProcAddr);
     }
+
     ~FakeInstance() { destroy_instance_dispatch_table(get_dispatch_key(handle())); }
+
+    FakeInstance(const FakeInstance&) = delete;
+    FakeInstance& operator=(const FakeInstance&) = delete;
 
     VkInstance handle() { return reinterpret_cast<VkInstance>(this); }
     VkPhysicalDevice physical_device() { return reinterpret_cast<VkPhysicalDevice>(this); }
@@ -452,27 +456,27 @@ class FakeInstance {
 
 TEST_F(DeviceMemoryReportDispatchTests, EnumerateDeviceExtensionPropertiesDeduplicatesAndHandlesIncomplete) {
     FakeInstance instance;
-    VkPhysicalDevice phys_dev = instance.physical_device();
+    VkPhysicalDevice physical_device = instance.physical_device();
 
     // Downstream exposes VK_KHR_swapchain + VK_EXT_device_memory_report (2 extensions).
     // The layer merges VK_EXT_device_memory_report (duplicate) + VK_EXT_debug_marker (new),
     // so both the count query and the fill query must report 3 extensions.
     uint32_t count = 0;
-    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &count, nullptr), VK_SUCCESS);
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &count, nullptr), VK_SUCCESS);
     EXPECT_EQ(count, 3u);
 
     // Passing non-null pProperties with count == 0 or count < 3 must return VK_INCOMPLETE.
-    std::vector<VkExtensionProperties> props(3);
+    std::vector<VkExtensionProperties> properties(3);
     uint32_t zero_count = 0;
-    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &zero_count, props.data()), VK_INCOMPLETE);
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &zero_count, properties.data()), VK_INCOMPLETE);
     EXPECT_EQ(zero_count, 0u);
 
     uint32_t partial_count = 2;
-    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &partial_count, props.data()), VK_INCOMPLETE);
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &partial_count, properties.data()), VK_INCOMPLETE);
     EXPECT_EQ(partial_count, 2u);
 
     uint32_t full_count = 3;
-    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(phys_dev, nullptr, &full_count, props.data()), VK_SUCCESS);
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &full_count, properties.data()), VK_SUCCESS);
     EXPECT_EQ(full_count, 3u);
 }
 
