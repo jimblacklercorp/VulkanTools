@@ -235,6 +235,9 @@ if(BUILD_DEVICEMEMORYREPORT)
     endif()
 
     target_compile_definitions(VkLayer_DeviceMemoryReport PRIVATE VK_ENABLE_BETA_EXTENSIONS)
+    if(UNIX AND NOT APPLE)
+        target_link_options(VkLayer_DeviceMemoryReport PRIVATE "-Wl,-Bsymbolic-functions")
+    endif()
 endif()
 
 if (BUILD_TESTS AND NOT RUN_ON_GITHUB)

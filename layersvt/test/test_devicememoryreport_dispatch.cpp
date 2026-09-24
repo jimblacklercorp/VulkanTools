@@ -21,6 +21,7 @@
 // Vulkan implementation.
 
 #include "device_memory_report.h"
+#include "test_devicememoryreport_peer.h"
 #include "vk_layer_table.h"
 
 #include <vulkan/vulkan.h>
@@ -40,6 +41,12 @@ VkDeviceSize g_image_requirements_size = 0;
 int g_buffer_requirements_queries = 0;
 int g_image_requirements_queries = 0;
 
+// Controls whether the stub driver implements VK_EXT_debug_utils / VK_EXT_debug_marker naming.
+bool g_stub_supports_debug_utils = false;
+bool g_stub_supports_debug_marker = false;
+int g_set_debug_utils_name_calls = 0;
+int g_debug_marker_set_name_calls = 0;
+
 template <typename HandleType>
 HandleType MakeHandle(uintptr_t value) {
     return reinterpret_cast<HandleType>(value);
@@ -51,6 +58,15 @@ uint64_t AsObjectHandle(HandleType handle) {
 }
 
 uintptr_t g_next_handle = 0x10000;
+
+VKAPI_ATTR VkResult VKAPI_CALL StubCreateBuffer(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer* pBuffer) {
+    if (pBuffer != nullptr) {
+        *pBuffer = MakeHandle<VkBuffer>(++g_next_handle);
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL StubDestroyBuffer(VkDevice, VkBuffer, const VkAllocationCallbacks*) {}
 
 VKAPI_ATTR VkResult VKAPI_CALL StubCreateImage(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* pImage) {
     if (pImage != nullptr) {
@@ -92,10 +108,22 @@ VKAPI_ATTR void VKAPI_CALL StubGetImageMemoryRequirements(VkDevice, VkImage, VkM
     pMemoryRequirements->memoryTypeBits = 1;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL StubSetDebugUtilsObjectNameEXT(VkDevice, const VkDebugUtilsObjectNameInfoEXT*) {
+    ++g_set_debug_utils_name_calls;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL StubDebugMarkerSetObjectNameEXT(VkDevice, const VkDebugMarkerObjectNameInfoEXT*) {
+    ++g_debug_marker_set_name_calls;
+    return VK_SUCCESS;
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const char* pName) {
     if (pName == nullptr) return nullptr;
     const std::string name(pName);
 
+    if (name == "vkCreateBuffer") return reinterpret_cast<PFN_vkVoidFunction>(StubCreateBuffer);
+    if (name == "vkDestroyBuffer") return reinterpret_cast<PFN_vkVoidFunction>(StubDestroyBuffer);
     if (name == "vkCreateImage") return reinterpret_cast<PFN_vkVoidFunction>(StubCreateImage);
     if (name == "vkDestroyImage") return reinterpret_cast<PFN_vkVoidFunction>(StubDestroyImage);
     if (name == "vkAllocateMemory") return reinterpret_cast<PFN_vkVoidFunction>(StubAllocateMemory);
@@ -110,6 +138,12 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetDeviceProcAddr(VkDevice, const c
     }
     if (name == "vkGetBufferMemoryRequirements") return reinterpret_cast<PFN_vkVoidFunction>(StubGetBufferMemoryRequirements);
     if (name == "vkGetImageMemoryRequirements") return reinterpret_cast<PFN_vkVoidFunction>(StubGetImageMemoryRequirements);
+    if (g_stub_supports_debug_utils && name == "vkSetDebugUtilsObjectNameEXT") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubSetDebugUtilsObjectNameEXT);
+    }
+    if (g_stub_supports_debug_marker && name == "vkDebugMarkerSetObjectNameEXT") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubDebugMarkerSetObjectNameEXT);
+    }
 
     // Everything else is not implemented by the stub driver.
     return nullptr;
@@ -144,12 +178,54 @@ class DeviceMemoryReportDispatchTests : public ::testing::Test {
         g_image_requirements_size = 0;
         g_buffer_requirements_queries = 0;
         g_image_requirements_queries = 0;
+        g_stub_supports_debug_utils = false;
+        g_stub_supports_debug_marker = false;
+        g_set_debug_utils_name_calls = 0;
+        g_debug_marker_set_name_calls = 0;
     }
 
     void TearDown() override {
         DeviceMemoryReport::Get().Reset();
     }
 };
+
+TEST_F(DeviceMemoryReportDispatchTests, ProactiveMemoryRequirementsQuery) {
+    FakeDevice device;
+    g_image_requirements_size = 16384;
+    g_buffer_requirements_size = 2048;
+
+    VkImageCreateInfo image_info = {};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_info.extent = {64, 64, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImage image = VK_NULL_HANDLE;
+    ASSERT_EQ(vkCreateImage(device.handle(), &image_info, nullptr, &image), VK_SUCCESS);
+    EXPECT_EQ(g_image_requirements_queries, 1);
+    EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 16384u);
+
+    VkBufferCreateInfo buffer_info = {};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = 1024;
+    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer buffer = VK_NULL_HANDLE;
+    ASSERT_EQ(vkCreateBuffer(device.handle(), &buffer_info, nullptr, &buffer), VK_SUCCESS);
+    EXPECT_EQ(g_buffer_requirements_queries, 1);
+    EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(buffer)), 2048u);
+
+    vkDestroyImage(device.handle(), image, nullptr);
+    vkDestroyBuffer(device.handle(), buffer, nullptr);
+}
 
 TEST_F(DeviceMemoryReportDispatchTests, BindBufferMemoryQueriesUnknownResourceSize) {
     // A buffer whose size was never recorded (for example when the application created it before
@@ -276,6 +352,146 @@ TEST_F(DeviceMemoryReportDispatchTests, BindImageMemory2SkipsDisjointImagePlaneB
 
     EXPECT_EQ(g_image_requirements_queries, 0);
     EXPECT_EQ(DeviceMemoryReport::Get().GetRecordedResourceSize(AsObjectHandle(image)), 0u);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, SetDebugUtilsObjectNameStandaloneAndChained) {
+    // 1. Standalone: driver/lower layers do not implement vkSetDebugUtilsObjectNameEXT.
+    g_stub_supports_debug_utils = false;
+    FakeDevice standalone_device;
+    VkBuffer buffer = MakeHandle<VkBuffer>(0xB9001);
+
+    auto pfn_set_name = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetDeviceProcAddr(standalone_device.handle(), "vkSetDebugUtilsObjectNameEXT"));
+    ASSERT_NE(pfn_set_name, nullptr);
+
+    VkDebugUtilsObjectNameInfoEXT name_info = {};
+    name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    name_info.objectType = VK_OBJECT_TYPE_BUFFER;
+    name_info.objectHandle = AsObjectHandle(buffer);
+    name_info.pObjectName = "standalone_buffer";
+
+    EXPECT_EQ(pfn_set_name(standalone_device.handle(), &name_info), VK_SUCCESS);
+    EXPECT_EQ(g_set_debug_utils_name_calls, 0);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, AsObjectHandle(buffer)),
+              "standalone_buffer");
+
+    // 2. Chained: driver/lower layer implements vkSetDebugUtilsObjectNameEXT.
+    g_stub_supports_debug_utils = true;
+    FakeDevice chained_device;
+    name_info.pObjectName = "chained_buffer";
+
+    EXPECT_EQ(pfn_set_name(chained_device.handle(), &name_info), VK_SUCCESS);
+    EXPECT_EQ(g_set_debug_utils_name_calls, 1);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_BUFFER, AsObjectHandle(buffer)),
+              "chained_buffer");
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, DebugMarkerSetObjectNameStandaloneAndChained) {
+    // 1. Standalone: driver/lower layers do not implement vkDebugMarkerSetObjectNameEXT.
+    g_stub_supports_debug_marker = false;
+    FakeDevice standalone_device;
+    VkImage image = MakeHandle<VkImage>(0xB9002);
+
+    auto pfn_marker_set_name = reinterpret_cast<PFN_vkDebugMarkerSetObjectNameEXT>(
+        vkGetDeviceProcAddr(standalone_device.handle(), "vkDebugMarkerSetObjectNameEXT"));
+    ASSERT_NE(pfn_marker_set_name, nullptr);
+
+    VkDebugMarkerObjectNameInfoEXT marker_info = {};
+    marker_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
+    marker_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+    marker_info.object = AsObjectHandle(image);
+    marker_info.pObjectName = "standalone_image";
+
+    EXPECT_EQ(pfn_marker_set_name(standalone_device.handle(), &marker_info), VK_SUCCESS);
+    EXPECT_EQ(g_debug_marker_set_name_calls, 0);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, AsObjectHandle(image)),
+              "standalone_image");
+
+    // 2. Chained: driver/lower layer implements vkDebugMarkerSetObjectNameEXT.
+    g_stub_supports_debug_marker = true;
+    FakeDevice chained_device;
+    marker_info.pObjectName = "chained_image";
+
+    EXPECT_EQ(pfn_marker_set_name(chained_device.handle(), &marker_info), VK_SUCCESS);
+    EXPECT_EQ(g_debug_marker_set_name_calls, 1);
+    EXPECT_EQ(DeviceMemoryReportTestPeer::GetDebugObjectName(VK_OBJECT_TYPE_IMAGE, AsObjectHandle(image)),
+              "chained_image");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL StubEnumerateDeviceExtensionPropertiesWithOverlap(
+    VkPhysicalDevice, const char*, uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
+    static const VkExtensionProperties driver_extensions[] = {
+        {VK_KHR_SWAPCHAIN_EXTENSION_NAME, 70},
+        {VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, VK_EXT_DEVICE_MEMORY_REPORT_SPEC_VERSION},
+    };
+    return util_GetExtensionProperties(2, driver_extensions, pPropertyCount, pProperties);
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL StubGetInstanceProcAddr(VkInstance, const char* pName) {
+    if (pName == nullptr) return nullptr;
+    if (std::string(pName) == "vkEnumerateDeviceExtensionProperties") {
+        return reinterpret_cast<PFN_vkVoidFunction>(StubEnumerateDeviceExtensionPropertiesWithOverlap);
+    }
+    return nullptr;
+}
+
+class FakeInstance {
+   public:
+    FakeInstance() {
+        dispatch_key_ = this;
+        initInstanceTable(handle(), StubGetInstanceProcAddr);
+    }
+
+    ~FakeInstance() { destroy_instance_dispatch_table(get_dispatch_key(handle())); }
+
+    FakeInstance(const FakeInstance&) = delete;
+    FakeInstance& operator=(const FakeInstance&) = delete;
+
+    VkInstance handle() { return reinterpret_cast<VkInstance>(this); }
+    VkPhysicalDevice physical_device() { return reinterpret_cast<VkPhysicalDevice>(this); }
+
+   private:
+    void* dispatch_key_ = nullptr;
+};
+
+TEST_F(DeviceMemoryReportDispatchTests, EnumerateDeviceExtensionPropertiesDeduplicatesAndHandlesIncomplete) {
+    FakeInstance instance;
+    VkPhysicalDevice physical_device = instance.physical_device();
+
+    // Downstream exposes VK_KHR_swapchain + VK_EXT_device_memory_report (2 extensions).
+    // The layer merges VK_EXT_device_memory_report (duplicate) + VK_EXT_debug_marker (new),
+    // so both the count query and the fill query must report 3 extensions.
+    uint32_t count = 0;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &count, nullptr), VK_SUCCESS);
+    EXPECT_EQ(count, 3u);
+
+    // Passing non-null pProperties with count == 0 or count < 3 must return VK_INCOMPLETE.
+    std::vector<VkExtensionProperties> properties(3);
+    uint32_t zero_count = 0;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &zero_count, properties.data()), VK_INCOMPLETE);
+    EXPECT_EQ(zero_count, 0u);
+
+    uint32_t partial_count = 2;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &partial_count, properties.data()), VK_INCOMPLETE);
+    EXPECT_EQ(partial_count, 2u);
+
+    uint32_t full_count = 3;
+    EXPECT_EQ(vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &full_count, properties.data()), VK_SUCCESS);
+    EXPECT_EQ(full_count, 3u);
+}
+
+TEST_F(DeviceMemoryReportDispatchTests, CreateDebugUtilsMessengerStubInitializesHandle) {
+    FakeInstance instance;
+    auto pfn_create_messenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance.handle(), "vkCreateDebugUtilsMessengerEXT"));
+    ASSERT_NE(pfn_create_messenger, nullptr);
+
+    VkDebugUtilsMessengerCreateInfoEXT create_info = {};
+    create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    VkDebugUtilsMessengerEXT messenger = MakeHandle<VkDebugUtilsMessengerEXT>(0xDEADBEEF);
+
+    EXPECT_EQ(pfn_create_messenger(instance.handle(), &create_info, nullptr, &messenger), VK_SUCCESS);
+    EXPECT_EQ(messenger, static_cast<VkDebugUtilsMessengerEXT>(VK_NULL_HANDLE));
 }
 
 }  // namespace

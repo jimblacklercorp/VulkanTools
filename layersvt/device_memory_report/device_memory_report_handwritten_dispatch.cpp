@@ -31,6 +31,10 @@ static PFN_vkVoidFunction devmemreport_known_instance_functions(const char* pNam
     if (strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyInstance);
     if (strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumeratePhysicalDevices);
     if (strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumeratePhysicalDeviceGroups);
+    if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceExtensionProperties);
+    if (strcmp(pName, "vkCreateDebugUtilsMessengerEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCreateDebugUtilsMessengerEXT);
+    if (strcmp(pName, "vkDestroyDebugUtilsMessengerEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyDebugUtilsMessengerEXT);
+    if (strcmp(pName, "vkSubmitDebugUtilsMessageEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSubmitDebugUtilsMessageEXT);
     return nullptr;
 }
 
@@ -53,6 +57,29 @@ static PFN_vkVoidFunction devmemreport_known_core_device_functions(const char* p
     if (strcmp(pName, "vkGetImageMemoryRequirements2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkGetImageMemoryRequirements2);
     if (strcmp(pName, "vkGetBufferMemoryRequirements") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkGetBufferMemoryRequirements);
     if (strcmp(pName, "vkGetBufferMemoryRequirements2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkGetBufferMemoryRequirements2);
+    return nullptr;
+}
+
+// Device functions for extensions provided directly by this layer (VK_EXT_debug_utils and
+// VK_EXT_debug_marker). These are returned unconditionally so the layer functions standalone
+// even when neither the underlying driver nor VK_LAYER_GOOGLE_DebugMarker implements them.
+static PFN_vkVoidFunction devmemreport_known_layer_device_extension_functions(const char* pName) {
+    // VK_EXT_debug_utils
+    if (strcmp(pName, "vkSetDebugUtilsObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSetDebugUtilsObjectNameEXT);
+    if (strcmp(pName, "vkSetDebugUtilsObjectTagEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkSetDebugUtilsObjectTagEXT);
+    if (strcmp(pName, "vkCmdBeginDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdBeginDebugUtilsLabelEXT);
+    if (strcmp(pName, "vkCmdEndDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdEndDebugUtilsLabelEXT);
+    if (strcmp(pName, "vkCmdInsertDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdInsertDebugUtilsLabelEXT);
+    if (strcmp(pName, "vkQueueBeginDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkQueueBeginDebugUtilsLabelEXT);
+    if (strcmp(pName, "vkQueueEndDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkQueueEndDebugUtilsLabelEXT);
+    if (strcmp(pName, "vkQueueInsertDebugUtilsLabelEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkQueueInsertDebugUtilsLabelEXT);
+
+    // VK_EXT_debug_marker
+    if (strcmp(pName, "vkDebugMarkerSetObjectNameEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDebugMarkerSetObjectNameEXT);
+    if (strcmp(pName, "vkDebugMarkerSetObjectTagEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkDebugMarkerSetObjectTagEXT);
+    if (strcmp(pName, "vkCmdDebugMarkerBeginEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdDebugMarkerBeginEXT);
+    if (strcmp(pName, "vkCmdDebugMarkerEndEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdDebugMarkerEndEXT);
+    if (strcmp(pName, "vkCmdDebugMarkerInsertEXT") == 0) return reinterpret_cast<PFN_vkVoidFunction>(vkCmdDebugMarkerInsertEXT);
     return nullptr;
 }
 
@@ -79,6 +106,12 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
     }
 
     if (instance == nullptr) {
+        if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) {
+            return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceExtensionProperties);
+        }
+        if (strcmp(pName, "vkEnumerateDeviceLayerProperties") == 0) {
+            return reinterpret_cast<PFN_vkVoidFunction>(vkEnumerateDeviceLayerProperties);
+        }
         return nullptr;
     }
 
@@ -87,8 +120,12 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
         return func;
     }
     
-    // Core device functions can be returned directly from GIPA.
+    // Core device functions and layer-provided debug extension functions can be returned directly from GIPA.
     func = devmemreport_known_core_device_functions(pName);
+    if (func) {
+        return func;
+    }
+    func = devmemreport_known_layer_device_extension_functions(pName);
     if (func) {
         return func;
     }
@@ -98,7 +135,7 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
         return nullptr;
     }
 
-    // For extension device commands, verify the underlying chain supports them before returning an interceptor.
+    // For driver-dependent extension device commands, verify the underlying chain supports them before returning an interceptor.
     PFN_vkVoidFunction down_func = table->GetInstanceProcAddr(instance, pName);
     if (down_func == nullptr) {
         return nullptr;
@@ -113,8 +150,14 @@ EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(V
 }
 
 EXPORT_FUNCTION VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char* pName) {
-    if (device == nullptr) {
+    if (device == nullptr || pName == nullptr) {
         return nullptr;
+    }
+
+    // Extensions provided by this layer itself are always available regardless of underlying driver support.
+    PFN_vkVoidFunction layer_ext_func = devmemreport_known_layer_device_extension_functions(pName);
+    if (layer_ext_func) {
+        return layer_ext_func;
     }
 
     if (device_dispatch_table(device)->GetDeviceProcAddr == NULL) {
